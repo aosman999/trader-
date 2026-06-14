@@ -29,7 +29,10 @@ def make_broker(use_demo=False):
         return PaperBroker(use_demo=use_demo)
     if config.BROKER == "mexc":
         return MexcBroker()
-    raise ValueError(f"Unknown BROKER {config.BROKER!r}. Use 'paper' or 'mexc'.")
+    if config.BROKER == "mexc_futures":
+        return MexcFuturesBroker()
+    raise ValueError(f"Unknown BROKER {config.BROKER!r}. "
+                     f"Use 'paper', 'mexc', or 'mexc_futures'.")
 
 
 # Treat holdings worth less than this as "nothing" (dust left after a sell).
@@ -138,3 +141,71 @@ class MexcBroker:
 
     def total_value(self, price):
         return self.cash() + self.coin_value(price)
+
+
+class MexcFuturesBroker:
+    """Your real MEXC FUTURES account. LEVERAGED -> can be liquidated.
+    Long-only, isolated margin, leverage hard-capped at 10x, dry-run by default."""
+
+    label = "MEXC FUTURES (REAL, leveraged)"
+    is_live = True
+
+    def __init__(self):
+        import mexc_futures  # imported lazily
+        self.client = mexc_futures.MexcFuturesClient(leverage=config.LEVERAGE)
+        self.pair = config.SYMBOL + "_USDT"   # futures uses an underscore
+        self._size = None
+
+    def history(self):
+        return self.client.get_daily_closes(self.pair, config.HISTORY_DAYS)
+
+    def _contract_size(self):
+        if self._size is None:
+            self._size = self.client.contract_size(self.pair)
+        return self._size
+
+    def cash(self):
+        return self.client.usdt_balance()
+
+    def _position(self):
+        return self.client.long_position(self.pair)   # (contracts, avg_price)
+
+    def coin_value(self, price):
+        vol, _ = self._position()
+        return vol * self._contract_size() * price     # position notional value
+
+    def holding(self, price):
+        vol, _ = self._position()
+        return vol > 0
+
+    def entry_price(self):
+        _, avg = self._position()                      # MEXC tracks our entry
+        return avg
+
+    def buy(self, price):
+        margin = self.cash() * config.TRADE_FRACTION
+        if margin < 1:
+            return None
+        notional = margin * self.client.leverage
+        vol = max(1, round(notional / (price * self._contract_size())))
+        result = self.client.open_long(self.pair, vol, margin)
+        lev = self.client.leverage
+        if result.get("dry_run"):
+            return (f"DRY-RUN: would OPEN LONG {vol} contracts "
+                    f"(~${margin:,.2f} margin @ {lev}x) [nothing placed]")
+        return (f"OPEN LONG {vol} contracts at ~${price:,.2f} "
+                f"(~${margin:,.2f} margin @ {lev}x) [REAL ORDER]")
+
+    def sell(self, price):
+        vol, _ = self._position()
+        if vol <= 0:
+            return None
+        result = self.client.close_long(self.pair, vol)
+        if result.get("dry_run"):
+            return f"DRY-RUN: would CLOSE LONG {vol} contracts [nothing placed]"
+        return f"CLOSE LONG {vol} contracts at ~${price:,.2f} [REAL ORDER]"
+
+    def total_value(self, price):
+        # Wallet USDT (margin balance). Unrealized P/L on the open position is
+        # shown on MEXC itself; we keep the summary simple and conservative.
+        return self.cash()

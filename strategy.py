@@ -144,14 +144,20 @@ def _decide_pro(prices, holding):
             return "SELL", f"overbought (RSI {rsi_now:.0f}); locking in gains"
         return "HOLD", "trend healthy; holding"
 
-    # Entry: require ALL of these to agree before risking cash.
+    # Entry: require ALL of these to agree -- the more filters, the fewer but
+    # higher-quality the trades. We only take setups where the trend is clearly
+    # already up, not just barely turning.
     crossover_up = fast_prev <= slow_prev and fast_now > slow_now
-    momentum_ok = rsi_now is not None and 50 <= rsi_now < config.RSI_SELL
-    above_trend = price_now > slow_now
-    if crossover_up and momentum_ok and above_trend:
-        return "BUY", (f"all signals agree: uptrend start, RSI {rsi_now:.0f}, "
-                       f"price above trend")
-    return "HOLD", "waiting for multiple signals to agree (fewer, safer trades)"
+    momentum_ok = rsi_now is not None and 52 <= rsi_now < config.RSI_SELL
+    above_trend = price_now > slow_now and price_now > fast_now
+    # Slow average itself rising over the last 5 days = a real, established uptrend
+    # (not a one-day blip). This filter avoids most "false start" entries.
+    slow_past = simple_moving_average(prices[:-5], config.SMA_SLOW)
+    trend_rising = slow_past is not None and slow_now > slow_past
+    if crossover_up and momentum_ok and above_trend and trend_rising:
+        return "BUY", (f"high-quality setup: confirmed uptrend, RSI {rsi_now:.0f}, "
+                       f"price above both averages")
+    return "HOLD", "no high-quality setup; staying out (most days are HOLD)"
 
 
 def _decide_breakout(prices, holding):

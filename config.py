@@ -19,12 +19,20 @@ Change the numbers below to experiment. Every setting is explained.
 SYMBOL = "BTC"
 
 # WHERE trades happen:
-#   "paper" -> fake money (the safe default; use this for weeks first)
-#   "mexc"  -> your REAL MEXC account, via mexc.py
-# IMPORTANT: even with "mexc", nothing real trades until you turn OFF dry-run
-# in mexc.py (DRY_RUN_DEFAULT). Until then it only validates orders. Read
-# MEXC_SETUP.md before changing this.
+#   "paper"        -> fake money (the safe default; use this for weeks first)
+#   "mexc"         -> your REAL MEXC SPOT account (you own the coin; no leverage)
+#   "mexc_futures" -> your REAL MEXC FUTURES account (LEVERAGED; can be liquidated)
+# IMPORTANT: even with a real broker, nothing trades until you turn OFF dry-run
+# in mexc.py / mexc_futures.py. Until then it only validates/builds orders.
+# Read MEXC_SETUP.md (spot) or FUTURES_SETUP.md (futures) before changing this.
 BROKER = "paper"
+
+# FUTURES ONLY -- how much leverage to use. HARD-capped at 10x in code
+# (mexc_futures.MAX_LEVERAGE); nothing can exceed it. Higher leverage = a
+# smaller price move can liquidate (zero out) the trade. We default LOW on
+# purpose; raise it only if you truly accept the added risk.
+#   At  2x: a ~50% adverse move liquidates.   At 10x: a ~10% move liquidates.
+LEVERAGE = 2
 
 # ---------------------------------------------------------------------------
 # YOUR (PRETEND) MONEY
@@ -47,13 +55,17 @@ STARTING_CASH = 20.0  # dollars
 # in reserve means one trade going wrong doesn't sink everything.
 TRADE_FRACTION = 0.50
 
-# Stop-loss: if the price falls this far below what we paid, sell immediately
-# to cut the loss. 0.05 = sell if we're down 5%.
-STOP_LOSS_PCT = 0.05
+# Stop-loss: if the price falls this far below our entry, exit immediately to
+# cut the loss SMALL. 0.02 = exit if price drops 2%.
+#   NOTE ON LEVERAGE (futures): a price stop is multiplied by leverage in money
+#   terms. At 10x, a 2% price stop ~= losing 20% of that trade's margin. Keeping
+#   this tight is what stops a single trade from doing real damage.
+STOP_LOSS_PCT = 0.02
 
-# Take-profit: if the price rises this far above what we paid, sell to lock in
-# the gain. 0.10 = sell once we're up 10%.
-TAKE_PROFIT_PCT = 0.10
+# Take-profit: lock in the gain once price rises this far above entry.
+# 0.04 = take profit at +4%. This is set wider than the stop (2:1), so the
+# winners are bigger than the losers -- which matters more than win rate.
+TAKE_PROFIT_PCT = 0.04
 
 # ---------------------------------------------------------------------------
 # WHICH STRATEGY TO USE
