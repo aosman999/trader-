@@ -55,16 +55,19 @@ class TestBacktest(unittest.TestCase):
 
 
 class TestFloor(unittest.TestCase):
+    def _fresh(self, cash):
+        return {"cash": cash, "symbol": None, "coins": 0.0, "entry_price": 0.0}
+
     def test_buy_never_risks_below_floor(self):
         # Equity 20, floor 12 -> at most 8 may be spent (not 50% = 10).
-        state = {"cash": 20.0, "coins": 0.0, "entry_price": 0.0}
-        portfolio.buy(state, 30000.0)
+        state = self._fresh(20.0)
+        portfolio.buy(state, "BTC", 30000.0)
         spent = 20.0 - state["cash"]
         self.assertLessEqual(spent, 20.0 - config.FLOOR_USD + 1e-6)
 
     def test_no_buy_when_at_floor(self):
-        state = {"cash": config.FLOOR_USD, "coins": 0.0, "entry_price": 0.0}
-        self.assertIsNone(portfolio.buy(state, 30000.0))
+        state = self._fresh(config.FLOOR_USD)
+        self.assertIsNone(portfolio.buy(state, "BTC", 30000.0))
 
 
 class TestRiskRatio(unittest.TestCase):

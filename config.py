@@ -14,9 +14,15 @@ Change the numbers below to experiment. Every setting is explained.
 # WHAT TO TRADE
 # ---------------------------------------------------------------------------
 
-# The crypto symbol. "BTC" = Bitcoin, "ETH" = Ethereum, "SOL" = Solana, etc.
-# We always trade it against US dollars (USD/USDT).
+# The crypto symbol used for single-coin tools (dashboard, backtest).
+# "BTC" = Bitcoin, "ETH" = Ethereum, etc. Traded against US dollars (USDT).
 SYMBOL = "BTC"
+
+# WATCHLIST -- the coins the live bot scans each run. It checks every one and
+# trades the SINGLE best high-quality setup, holding one position at a time
+# (so the $12 floor and position sizing stay simple and safe). Add or remove
+# coins freely; use names MEXC lists (e.g. "BTC","ETH","SOL","XRP","DOGE").
+WATCHLIST = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
 
 # WHERE trades happen:
 #   "paper"        -> fake money (the safe default; use this for weeks first)

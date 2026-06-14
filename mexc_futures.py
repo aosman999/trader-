@@ -151,6 +151,18 @@ class MexcFuturesClient:
                 return float(pos["holdVol"]), float(pos.get("holdAvgPrice", 0))
         return 0.0, 0.0
 
+    def any_long_position(self):
+        """Find the single open LONG across the WHOLE account (any symbol), so
+        the bot always knows what it's holding. Returns (pair, contracts, entry)
+        or (None, 0, 0.0)."""
+        data = self._request("GET", "/api/v1/private/position/open_positions",
+                             signed=True)
+        for pos in data.get("data", []):
+            if pos.get("positionType") == 1 and float(pos.get("holdVol", 0)) > 0:
+                return (pos.get("symbol"), float(pos["holdVol"]),
+                        float(pos.get("holdAvgPrice", 0)))
+        return None, 0.0, 0.0
+
     # -- orders (can cost money) ---------------------------------------------
 
     def _submit(self, params, margin_usd):

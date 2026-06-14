@@ -6,13 +6,23 @@ The bot's decision logic (strategy.py) shouldn't care whether it's playing with
 fake money or talking to a real exchange. So both live behind the same small
 interface, and config.BROKER picks which one bot.py uses:
 
-  "paper"  -> PaperBroker : fake money in portfolio.json (the safe default)
-  "mexc"   -> MexcBroker  : your real MEXC account (via mexc.py)
+  "paper"        -> PaperBroker        : fake money (the safe default)
+  "mexc"         -> MexcBroker          : real MEXC SPOT account
+  "mexc_futures" -> MexcFuturesBroker   : real MEXC FUTURES (leveraged)
 
-The MEXC broker still obeys mexc.py's safety rules: keys from the environment,
-DRY-RUN by default (validates orders, places nothing), and a hard size cap.
-So selecting "mexc" does NOT by itself spend real money -- dry-run must be
-turned off deliberately first.
+Every broker speaks the same methods, all built around holding AT MOST ONE coin
+at a time (which keeps the $12 floor and position sizing simple and safe):
+
+  get_prices(symbol)              -> recent closes for one coin
+  cash()                          -> spare USD/USDT available
+  current_position()             -> {symbol, amount, entry} or None
+  position_value(symbol, amt, p) -> dollar value of a holding
+  open(symbol, price)            -> enter a long in `symbol`
+  close(symbol, amount, price)   -> exit the held position
+
+The MEXC brokers obey their clients' safety rules (keys from the environment,
+dry-run by default, size caps), so picking a real broker does NOT by itself
+spend real money.
 """
 
 import json
@@ -24,7 +34,6 @@ import portfolio
 
 
 def make_broker(use_demo=False):
-    """Return the broker chosen in config.BROKER."""
     if config.BROKER == "paper":
         return PaperBroker(use_demo=use_demo)
     if config.BROKER == "mexc":
@@ -35,8 +44,13 @@ def make_broker(use_demo=False):
                      f"Use 'paper', 'mexc', or 'mexc_futures'.")
 
 
-# Treat holdings worth less than this as "nothing" (dust left after a sell).
+# Holdings worth less than this (USD) count as "nothing" (dust after a sell).
 DUST_USD = 1.0
+
+
+def _demo_seed(symbol):
+    """A stable per-coin seed so each watchlist coin gets its own demo series."""
+    return sum(ord(c) for c in symbol)
 
 
 class PaperBroker:
@@ -49,171 +63,155 @@ class PaperBroker:
         self.use_demo = use_demo
         self.state = portfolio.load()
 
-    def history(self):
+    def get_prices(self, symbol):
         if self.use_demo:
-            return data.demo_closes(config.HISTORY_DAYS, seed=42)
-        return data.get_closes(config.SYMBOL, config.INTERVAL, config.HISTORY_DAYS)
+            return data.demo_closes(config.HISTORY_DAYS, seed=_demo_seed(symbol))
+        return data.get_closes(symbol, config.INTERVAL, config.HISTORY_DAYS)
 
     def cash(self):
         return self.state["cash"]
 
-    def coin_value(self, price):
-        return self.state["coins"] * price
+    def current_position(self):
+        if self.state["coins"] > 0 and self.state.get("symbol"):
+            return {"symbol": self.state["symbol"],
+                    "amount": self.state["coins"],
+                    "entry": self.state["entry_price"]}
+        return None
 
-    def holding(self, price):
-        return self.coin_value(price) > DUST_USD
+    def position_value(self, symbol, amount, price):
+        return amount * price
 
-    def entry_price(self):
-        return self.state["entry_price"]
-
-    def buy(self, price):
-        msg = portfolio.buy(self.state, price)
+    def open(self, symbol, price):
+        msg = portfolio.buy(self.state, symbol, price)
         portfolio.save(self.state)
         return msg
 
-    def sell(self, price):
+    def close(self, symbol, amount, price):
         msg = portfolio.sell(self.state, price)
         portfolio.save(self.state)
         return msg
 
-    def total_value(self, price):
-        return portfolio.total_value(self.state, price)
-
 
 class MexcBroker:
-    """Your real MEXC account. Safe by default: dry-run until you disable it."""
+    """Real MEXC SPOT account. You own the coin; no leverage. Safe by default."""
 
-    label = "MEXC (REAL account)"
+    label = "MEXC SPOT (REAL account)"
     is_live = True
-    ENTRY_FILE = "mexc_entry.json"   # we remember our buy price; MEXC doesn't
+    STATE_FILE = "mexc_spot_state.json"   # remembers which coin we hold + entry
 
     def __init__(self):
-        import mexc  # imported lazily so paper users never need it
+        import mexc
         self.client = mexc.MexcClient()
-        self.pair = config.SYMBOL + "USDT"   # e.g. BTCUSDT
-        self.base = config.SYMBOL            # e.g. BTC
 
-    def history(self):
-        return self.client.get_closes(self.pair, config.INTERVAL,
+    def get_prices(self, symbol):
+        return self.client.get_closes(symbol + "USDT", config.INTERVAL,
                                       config.HISTORY_DAYS)
 
     def cash(self):
         return self.client.get_free_balance("USDT")
 
-    def _coins(self):
-        return self.client.get_free_balance(self.base)
+    def _load(self):
+        if os.path.exists(self.STATE_FILE):
+            with open(self.STATE_FILE) as f:
+                return json.load(f)
+        return {}
 
-    def coin_value(self, price):
-        return self._coins() * price
+    def current_position(self):
+        st = self._load()
+        symbol = st.get("symbol")
+        if not symbol:
+            return None
+        amount = self.client.get_free_balance(symbol)
+        if amount <= 0:
+            os.remove(self.STATE_FILE)
+            return None
+        return {"symbol": symbol, "amount": amount,
+                "entry": st.get("entry", 0.0)}
 
-    def holding(self, price):
-        return self.coin_value(price) > DUST_USD
+    def position_value(self, symbol, amount, price):
+        return amount * price
 
-    def entry_price(self):
-        if os.path.exists(self.ENTRY_FILE):
-            with open(self.ENTRY_FILE) as f:
-                return json.load(f).get("entry_price", 0.0)
-        return 0.0
-
-    def _save_entry(self, price):
-        with open(self.ENTRY_FILE, "w") as f:
-            json.dump({"entry_price": price}, f)
-
-    def buy(self, price):
-        equity = self.total_value(price)
-        risk_budget = max(0.0, equity - config.FLOOR_USD)   # protect the floor
-        usd = min(self.cash() * config.TRADE_FRACTION, risk_budget)
+    def open(self, symbol, price):
+        equity = self.cash()
+        usd = min(equity * config.TRADE_FRACTION,
+                  max(0.0, equity - config.FLOOR_USD))
         if usd < 1:
             return None
-        result = self.client.market_buy(self.pair, usd)
+        result = self.client.market_buy(symbol + "USDT", usd)
         if result.get("dry_run"):
-            return f"DRY-RUN: would BUY ~${usd:,.2f} of {self.base} (nothing placed)"
-        self._save_entry(price)
-        return f"BUY ~${usd:,.2f} of {self.base} at ~${price:,.2f} [REAL ORDER]"
+            return f"DRY-RUN: would BUY ~${usd:,.2f} of {symbol} (nothing placed)"
+        with open(self.STATE_FILE, "w") as f:
+            json.dump({"symbol": symbol, "entry": price}, f)
+        return f"BUY ~${usd:,.2f} of {symbol} at ~${price:,.2f} [REAL ORDER]"
 
-    def sell(self, price):
-        coins = self._coins()
-        if coins * price < DUST_USD:
-            return None
-        result = self.client.market_sell(self.pair, coins, price_hint=price)
+    def close(self, symbol, amount, price):
+        result = self.client.market_sell(symbol + "USDT", amount,
+                                         price_hint=price)
         if result.get("dry_run"):
-            return f"DRY-RUN: would SELL {coins:.8f} {self.base} (nothing placed)"
-        if os.path.exists(self.ENTRY_FILE):
-            os.remove(self.ENTRY_FILE)
-        return f"SELL {coins:.8f} {self.base} at ~${price:,.2f} [REAL ORDER]"
-
-    def total_value(self, price):
-        return self.cash() + self.coin_value(price)
+            return f"DRY-RUN: would SELL {amount:.8f} {symbol} (nothing placed)"
+        if os.path.exists(self.STATE_FILE):
+            os.remove(self.STATE_FILE)
+        return f"SELL {amount:.8f} {symbol} at ~${price:,.2f} [REAL ORDER]"
 
 
 class MexcFuturesBroker:
-    """Your real MEXC FUTURES account. LEVERAGED -> can be liquidated.
-    Long-only, isolated margin, leverage hard-capped at 10x, dry-run by default."""
+    """Real MEXC FUTURES. LEVERAGED -> can be liquidated. Long-only, isolated
+    margin, leverage hard-capped at 10x, dry-run by default."""
 
     label = "MEXC FUTURES (REAL, leveraged)"
     is_live = True
 
     def __init__(self):
-        import mexc_futures  # imported lazily
+        import mexc_futures
         self.client = mexc_futures.MexcFuturesClient(leverage=config.LEVERAGE)
-        self.pair = config.SYMBOL + "_USDT"   # futures uses an underscore
-        self._size = None
+        self._sizes = {}   # cache of contract sizes per pair
 
-    def history(self):
-        return self.client.get_closes(self.pair, config.INTERVAL,
+    @staticmethod
+    def _pair(symbol):
+        return symbol + "_USDT"
+
+    def get_prices(self, symbol):
+        return self.client.get_closes(self._pair(symbol), config.INTERVAL,
                                       config.HISTORY_DAYS)
 
-    def _contract_size(self):
-        if self._size is None:
-            self._size = self.client.contract_size(self.pair)
-        return self._size
+    def _contract_size(self, pair):
+        if pair not in self._sizes:
+            self._sizes[pair] = self.client.contract_size(pair)
+        return self._sizes[pair]
 
     def cash(self):
         return self.client.usdt_balance()
 
-    def _position(self):
-        return self.client.long_position(self.pair)   # (contracts, avg_price)
+    def current_position(self):
+        pair, vol, entry = self.client.any_long_position()
+        if not pair:
+            return None
+        return {"symbol": pair.split("_")[0], "amount": vol, "entry": entry}
 
-    def coin_value(self, price):
-        vol, _ = self._position()
-        return vol * self._contract_size() * price     # position notional value
+    def position_value(self, symbol, amount, price):
+        return amount * self._contract_size(self._pair(symbol)) * price
 
-    def holding(self, price):
-        vol, _ = self._position()
-        return vol > 0
-
-    def entry_price(self):
-        _, avg = self._position()                      # MEXC tracks our entry
-        return avg
-
-    def buy(self, price):
+    def open(self, symbol, price):
+        pair = self._pair(symbol)
         equity = self.cash()
-        risk_budget = max(0.0, equity - config.FLOOR_USD)   # protect the floor
-        # Isolated margin: the most a trade can lose is its margin. Keeping margin
-        # at or below (equity - FLOOR) means even a full liquidation leaves ~FLOOR.
-        margin = min(equity * config.TRADE_FRACTION, risk_budget)
+        margin = min(equity * config.TRADE_FRACTION,
+                     max(0.0, equity - config.FLOOR_USD))
         if margin < 1:
             return None
         notional = margin * self.client.leverage
-        vol = max(1, round(notional / (price * self._contract_size())))
-        result = self.client.open_long(self.pair, vol, margin)
+        vol = max(1, round(notional / (price * self._contract_size(pair))))
+        result = self.client.open_long(pair, vol, margin)
         lev = self.client.leverage
         if result.get("dry_run"):
-            return (f"DRY-RUN: would OPEN LONG {vol} contracts "
+            return (f"DRY-RUN: would OPEN LONG {vol} {symbol} contracts "
                     f"(~${margin:,.2f} margin @ {lev}x) [nothing placed]")
-        return (f"OPEN LONG {vol} contracts at ~${price:,.2f} "
+        return (f"OPEN LONG {vol} {symbol} contracts at ~${price:,.2f} "
                 f"(~${margin:,.2f} margin @ {lev}x) [REAL ORDER]")
 
-    def sell(self, price):
-        vol, _ = self._position()
-        if vol <= 0:
-            return None
-        result = self.client.close_long(self.pair, vol)
+    def close(self, symbol, amount, price):
+        pair = self._pair(symbol)
+        result = self.client.close_long(pair, amount)
         if result.get("dry_run"):
-            return f"DRY-RUN: would CLOSE LONG {vol} contracts [nothing placed]"
-        return f"CLOSE LONG {vol} contracts at ~${price:,.2f} [REAL ORDER]"
-
-    def total_value(self, price):
-        # Wallet USDT (margin balance). Unrealized P/L on the open position is
-        # shown on MEXC itself; we keep the summary simple and conservative.
-        return self.cash()
+            return (f"DRY-RUN: would CLOSE {amount} {symbol} contracts "
+                    f"[nothing placed]")
+        return f"CLOSE {amount} {symbol} contracts at ~${price:,.2f} [REAL ORDER]"

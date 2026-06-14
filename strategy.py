@@ -177,6 +177,18 @@ def _decide_breakout(prices, holding):
     return "HOLD", "no breakout yet; waiting in cash"
 
 
+def momentum_score(prices):
+    """A number for RANKING coins that all have a BUY signal: higher = stronger.
+    When the bot scans its watchlist and several coins look buyable, it picks the
+    one with the highest score. Uses how far the fast average sits above the slow
+    average (trend strength) -- a steadier, stronger uptrend scores higher."""
+    fast = simple_moving_average(prices, config.SMA_FAST)
+    slow = simple_moving_average(prices, config.SMA_SLOW)
+    if not fast or not slow:
+        return 0.0
+    return (fast / slow) - 1.0
+
+
 # Registry so backtest.py can ask for any strategy by name.
 STRATEGIES = {
     "sma": _decide_sma,

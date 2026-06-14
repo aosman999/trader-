@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
-bot.py  --  the trading bot you run once a day.
-===============================================
+bot.py  --  the trading bot you run on a schedule.
+==================================================
 
-WHAT IT DOES, each time you run it:
-  1. Connects to your "broker" (paper money OR your real MEXC account -- set by
-     config.BROKER).
-  2. Downloads recent prices.
-  3. Asks the strategy: BUY, SELL, or HOLD?
-  4. Acts on that decision, respecting the risk rules.
-  5. Prints a clear summary.
+WHAT IT DOES, each run:
+  1. Connects to your broker (paper money OR a real MEXC account).
+  2. If it already holds a coin -> manages just that one (sell / hold).
+  3. If it's in cash -> SCANS your whole watchlist and trades the SINGLE best
+     high-quality setup (or nothing, if none qualify).
+  4. Always protects the $12 capital floor.
 
-SAFETY: with config.BROKER = "paper" it uses FAKE money. With "mexc" it talks to
-your real account, but mexc.py stays in DRY-RUN (validates orders, places
-nothing) until you deliberately turn that off. So this script cannot spend real
-money by accident.
+It holds at most ONE coin at a time, which keeps risk and sizing simple.
+
+SAFETY: with config.BROKER = "paper" it uses FAKE money. With a real broker it
+stays in DRY-RUN (decides trades, places nothing) until you turn that off.
 
 HOW TO RUN:
     python3 bot.py            # run once, using config.BROKER
@@ -30,6 +29,67 @@ import config
 import strategy
 
 
+def _manage_open_position(broker, pos):
+    """We already hold a coin: check the floor, then decide sell/hold on it."""
+    symbol = pos["symbol"]
+    prices = broker.get_prices(symbol)
+    price = prices[-1]
+    value = broker.position_value(symbol, pos["amount"], price)
+    equity = broker.cash() + value
+
+    print(f"\n  Holding  : {symbol} (entry ${pos['entry']:,.2f})")
+    print(f"  Price now: ${price:,.2f}   Equity: ${equity:,.2f}")
+
+    # Circuit breaker: protect the floor.
+    if equity <= config.FLOOR_USD:
+        print(f"  ** FLOOR REACHED ** (${equity:,.2f} <= ${config.FLOOR_USD:,.2f})")
+        print(f"  Closing to protect the floor: "
+              f"{broker.close(symbol, pos['amount'], price)}")
+        print("  Trading halted. Review before resuming.\n")
+        return
+
+    action, reason = strategy.decide(prices, True, pos["entry"])
+    print(f"  Decision : {action}  --  {reason}")
+    if action == "SELL":
+        print(f"  Executed : {broker.close(symbol, pos['amount'], price)}")
+    else:
+        print("  Executed : holding (no change)")
+
+
+def _scan_and_maybe_enter(broker):
+    """We're in cash: scan the watchlist and enter the best qualifying coin."""
+    cash = broker.cash()
+    print(f"\n  In cash  : ${cash:,.2f}")
+    if cash <= config.FLOOR_USD:
+        print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
+        return
+
+    best = None   # (score, symbol, price, reason)
+    print(f"  Scanning {len(config.WATCHLIST)} coins for a high-quality setup...")
+    for symbol in config.WATCHLIST:
+        try:
+            prices = broker.get_prices(symbol)
+        except Exception as exc:  # noqa: BLE001 - skip a coin we can't price
+            print(f"    {symbol:<5} skipped ({str(exc).splitlines()[0][:40]})")
+            continue
+        action, reason = strategy.decide(prices, False, 0.0)
+        if action == "BUY":
+            score = strategy.momentum_score(prices)
+            print(f"    {symbol:<5} BUY signal (strength {score * 100:+.1f}%)")
+            if best is None or score > best[0]:
+                best = (score, symbol, prices[-1], reason)
+        else:
+            print(f"    {symbol:<5} {action.lower()}")
+
+    if best is None:
+        print("  No coin has a high-quality setup right now. Staying in cash.\n")
+        return
+
+    _, symbol, price, reason = best
+    print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
+    print(f"  Executed : {broker.open(symbol, price) or 'nothing (floor/size limit)'}")
+
+
 def main():
     use_demo = "--demo" in sys.argv
 
@@ -40,64 +100,26 @@ def main():
         print("Paper portfolio reset. Starting fresh next run.")
         return
 
-    # --demo always means safe paper mode, regardless of config.BROKER.
-    if use_demo:
-        broker = broker_mod.PaperBroker(use_demo=True)
-    else:
-        broker = broker_mod.make_broker()
+    broker = broker_mod.PaperBroker(use_demo=True) if use_demo \
+        else broker_mod.make_broker()
 
-    print(f"\n=== Trading bot | {config.SYMBOL} | {broker.label}"
-          f"{' | DEMO data' if use_demo else ''} ===")
+    print(f"\n=== Trading bot | watchlist {','.join(config.WATCHLIST)} | "
+          f"{broker.label}{' | DEMO data' if use_demo else ''} ===")
     if broker.is_live:
-        print("  (real account selected; orders still gated by mexc.py dry-run)")
+        print("  (real account; orders still gated by the client's dry-run)")
 
-    # 1-2. Prices.
     try:
-        prices = broker.history()
+        pos = broker.current_position()
     except Exception as exc:  # noqa: BLE001
-        print(f"\nCould not get prices / connect:\n  {exc}")
-        return
-    price_now = prices[-1]
-    holding = broker.holding(price_now)
-
-    # CIRCUIT BREAKER: protect the capital floor. If we've fallen to it, close any
-    # open position and stop trading -- no new risk until you intervene.
-    total_now = broker.total_value(price_now)
-    if total_now <= config.FLOOR_USD:
-        print(f"\n  ** FLOOR REACHED ** equity ${total_now:,.2f} <= "
-              f"${config.FLOOR_USD:,.2f}")
-        if holding:
-            print(f"  Closing position to protect the floor: "
-                  f"{broker.sell(price_now)}")
-        print("  Trading halted. Review before resuming "
-              "(raise FLOOR_USD or add funds).\n")
+        print(f"\nCould not reach the account:\n  {exc}")
         return
 
-    # 3. Decide.
-    action, reason = strategy.decide(prices, holding, broker.entry_price())
-    print(f"\n  Price now: ${price_now:,.2f}")
-    print(f"  Decision : {action}  --  {reason}")
+    if pos:
+        _manage_open_position(broker, pos)
+    else:
+        _scan_and_maybe_enter(broker)
 
-    # 4. Act.
-    message = None
-    if action == "BUY" and not holding:
-        message = broker.buy(price_now)
-    elif action == "SELL" and holding:
-        message = broker.sell(price_now)
-    print(f"  Executed : {message or 'nothing (no trade today)'}")
-
-    # 5. Summary.
-    total = broker.total_value(price_now)
-    print("\n  ---- Account ----")
-    print(f"  Cash      : ${broker.cash():,.2f}")
-    print(f"  {config.SYMBOL + ' value':<10}: ${broker.coin_value(price_now):,.2f}")
-    print(f"  TOTAL     : ${total:,.2f}")
-    if not broker.is_live:
-        profit = total - config.STARTING_CASH
-        pct = profit / config.STARTING_CASH * 100
-        print(f"  Since start: ${profit:+,.2f} ({pct:+.1f}%) "
-              f"(started with ${config.STARTING_CASH:,.2f} fake)")
-    print()
+    print(f"  Cash available: ${broker.cash():,.2f}\n")
 
 
 if __name__ == "__main__":
