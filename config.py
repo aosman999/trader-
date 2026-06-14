@@ -135,6 +135,12 @@ SIGNAL_TP_PCT = _f("SIGNAL_TP_PCT", "0.16")
 # 0 = off. export NOTIFY_STATUS_MINUTES="15"
 NOTIFY_STATUS_MINUTES = _i("NOTIFY_STATUS_MINUTES", "15")
 
+# PROFIT GOAL. When your spot balance reaches TARGET_USD, the bot STOPS opening
+# new trades (banks the win) and texts you. 0 = off. It's a price level, not a
+# deadline -- no setting makes a target arrive faster than the market allows.
+# export TARGET_USD="1000"
+TARGET_USD = _f("TARGET_USD", "0")
+
 # ---------------------------------------------------------------------------
 # REALISM / FILES
 # ---------------------------------------------------------------------------
