@@ -40,24 +40,22 @@ SHOW_TOP_SETUPS = 12                      # how many candidate setups to detail
 SIGNAL_COOLDOWN_MIN = 60                  # don't re-text the same signal within this
 
 
-def _goal_reached(cash):
-    """If a profit goal is set and cash has reached it, stop opening new trades
-    and text once. Returns True if the goal is currently met."""
+def _goal_milestone(cash):
+    """Alert ONCE when the profit goal is reached. Returns True only if the bot
+    should STOP opening new trades (TARGET_STOP); by default it keeps trading."""
     if config.TARGET_USD <= 0 or cash < config.TARGET_USD:
         if os.path.exists(GOAL_FILE):    # below target again -> re-arm the alert
             os.remove(GOAL_FILE)
         return False
     if not os.path.exists(GOAL_FILE):
-        notify.send(f"GOAL REACHED: ${cash:,.2f} (target ${config.TARGET_USD:,.0f}). "
-                    f"Bot has stopped opening new trades to bank the win.",
-                    title="Bot: GOAL reached")
+        tail = ("stopping new trades to bank it" if config.TARGET_STOP
+                else "and it keeps trading")
+        notify.send(f"GOAL REACHED: ${cash:,.2f} (target ${config.TARGET_USD:,.0f}) "
+                    f"-- {tail}.", title="Bot: GOAL reached")
         with open(GOAL_FILE, "w") as f:
             f.write("1")
-        print(f"  GOAL REACHED ${cash:,.2f} >= ${config.TARGET_USD:,.0f} -- "
-              f"not opening new trades.")
-    else:
-        print(f"  Goal already reached; holding in cash (${cash:,.2f}).")
-    return True
+        print(f"  GOAL REACHED ${cash:,.2f} >= ${config.TARGET_USD:,.0f} ({tail}).")
+    return config.TARGET_STOP
 
 
 def _fmt_price(p):
@@ -318,7 +316,7 @@ def _maybe_enter_spot(broker, best, buy_cands):
     (status_text, a_trade_happened)."""
     cash = broker.cash()
     print(f"  In cash  : ${cash:,.2f}")
-    if _goal_reached(cash):
+    if _goal_milestone(cash):
         return f"Goal reached ${cash:,.2f}; banked, not trading", False
     if cash <= config.FLOOR_USD:
         print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
