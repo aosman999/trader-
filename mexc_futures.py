@@ -143,6 +143,17 @@ class MexcFuturesClient:
                 up += v
         return up / tot if tot > 0 else 0.5
 
+    def volume_ratio(self, symbol, interval, limit):
+        """Recent volume vs average (last 3 candles / window)."""
+        data = self._request("GET", f"/api/v1/contract/kline/{symbol}",
+                             {"interval": self._INTERVALS[interval]})
+        vols = [float(v) for v in data["data"]["vol"][-limit:]]
+        if len(vols) < 5:
+            return 1.0
+        avg = sum(vols) / len(vols)
+        recent = sum(vols[-3:]) / 3
+        return recent / avg if avg > 0 else 1.0
+
     def contract_size(self, symbol):
         """How much of the coin one contract represents (e.g. 0.0001 BTC)."""
         data = self._request("GET", "/api/v1/contract/detail",

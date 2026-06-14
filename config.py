@@ -124,6 +124,18 @@ USE_BUY_POWER = _s("USE_BUY_POWER", "false").strip().lower() in (
     "true", "1", "yes", "on")
 BUY_POWER_MIN = _f("BUY_POWER_MIN", "0.55")   # 0.55 = 55% of volume buying
 
+# VOLUME filter. When "true", a setup must have real interest behind it: recent
+# volume at least VOL_MIN_RATIO x its average. export USE_VOLUME="true"
+USE_VOLUME = _s("USE_VOLUME", "false").strip().lower() in ("true", "1", "yes", "on")
+VOL_MIN_RATIO = _f("VOL_MIN_RATIO", "1.0")    # 1.0 = at least average volume
+
+# TRADING SESSIONS (UTC). Only trade during these market sessions; empty = 24/7.
+# Options: NY, London, Tokyo, Sydney. NOTE: all four together cover almost the
+# whole day, so listing all four is basically 24/7. Pick specific ones (e.g.
+# "London,NY") to restrict to the high-liquidity hours. export TRADING_SESSIONS="London,NY"
+TRADING_SESSIONS = [s.strip() for s in _s("TRADING_SESSIONS", "").split(",")
+                    if s.strip()]
+
 # DON'T SIT IDLE TOO LONG. If MAX_IDLE_DAYS > 0 and no trade has happened in that
 # many days, the bot takes the BEST available candidate even without full
 # multi-timeframe confirmation -- so it never goes longer than this without

@@ -25,7 +25,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import broker as broker_mod
 import config
@@ -39,6 +39,26 @@ GOAL_FILE = "goal_reached.json"          # marks that we've alerted on the goal
 TARGET_START_FILE = "target_start.json"  # date the deadline clock started
 SHOW_TOP_SETUPS = 12                      # how many candidate setups to detail
 SIGNAL_COOLDOWN_MIN = 60                  # don't re-text the same signal within this
+
+
+_SESSIONS = {"sydney": (22, 7), "tokyo": (0, 9),
+             "london": (8, 17), "ny": (13, 22)}   # UTC hour ranges
+
+
+def _in_session():
+    """True if it's inside one of config.TRADING_SESSIONS (UTC). Empty = always."""
+    if not config.TRADING_SESSIONS:
+        return True
+    h = datetime.now(timezone.utc).hour
+    for name in config.TRADING_SESSIONS:
+        rng = _SESSIONS.get(name.strip().lower())
+        if not rng:
+            continue
+        start, end = rng
+        if (start < end and start <= h < end) or \
+           (start > end and (h >= start or h < end)):
+            return True
+    return False
 
 
 def _futures_equity():
@@ -310,6 +330,9 @@ def _scan_setups(broker):
             # Buy/sell power: a long needs buyers in control.
             if config.USE_BUY_POWER and broker.buy_power(symbol) < config.BUY_POWER_MIN:
                 continue
+            # Volume: the move needs real interest behind it.
+            if config.USE_VOLUME and broker.volume_ratio(symbol) < config.VOL_MIN_RATIO:
+                continue
             long_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
         elif config.FUTURES_SIGNALS and strategy.short_signal(prices):
             if config.USE_SR and not strategy.has_room(prices, "short",
@@ -317,6 +340,8 @@ def _scan_setups(broker):
                 continue
             # Buy/sell power: a short needs sellers in control.
             if config.USE_BUY_POWER and broker.buy_power(symbol) > (1 - config.BUY_POWER_MIN):
+                continue
+            if config.USE_VOLUME and broker.volume_ratio(symbol) < config.VOL_MIN_RATIO:
                 continue
             # short strength: how far the fast average sits BELOW the slow.
             short_cands.append((-strategy.momentum_score(prices), symbol, prices[-1]))
@@ -439,15 +464,24 @@ def main():
     # runs even while a spot trade is open.
     best_long, long_cands, best_signal = _scan_setups(broker)
 
+    # Trading-session gate: only OPEN new trades / send new signals inside the
+    # chosen sessions. (Managing/exiting an open position is never blocked.)
+    in_session = _in_session()
+    if not in_session and config.TRADING_SESSIONS:
+        print(f"  Outside trading sessions {config.TRADING_SESSIONS} -- "
+              f"no new entries/signals.")
+
     # Futures signal: text the best LONG or SHORT setup to place by hand.
-    if config.FUTURES_SIGNALS and best_signal:
+    if in_session and config.FUTURES_SIGNALS and best_signal:
         _send_futures_signal(best_signal[0], best_signal[1], best_signal[2])
 
     # Spot side (long-only: buys to enter, sells to exit).
     if pos:
-        status, traded = _manage_open_position(broker, pos)
-    else:
+        status, traded = _manage_open_position(broker, pos)   # exits always allowed
+    elif in_session:
         status, traded = _maybe_enter_spot(broker, best_long, long_cands)
+    else:
+        status, traded = f"Outside session; not entering", False
 
     print(f"  Cash available: ${broker.cash():,.2f}\n")
 

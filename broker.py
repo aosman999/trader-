@@ -76,6 +76,9 @@ class PaperBroker:
     def buy_power(self, symbol):
         return 0.5   # paper/demo has no volume data -> neutral (passes filter)
 
+    def volume_ratio(self, symbol):
+        return 1.0   # neutral for paper/demo
+
     def cash(self):
         return self.state["cash"]
 
@@ -134,6 +137,9 @@ class MexcBroker:
 
     def buy_power(self, symbol):
         return self.client.buy_power(symbol + "USDT", config.INTERVAL, 50)
+
+    def volume_ratio(self, symbol):
+        return self.client.volume_ratio(symbol + "USDT", config.INTERVAL, 50)
 
     def _load(self):
         if os.path.exists(self.STATE_FILE):
@@ -239,6 +245,9 @@ class MexcFuturesBroker:
 
     def buy_power(self, symbol):
         return self.client.buy_power(self._pair(symbol), config.INTERVAL, 50)
+
+    def volume_ratio(self, symbol):
+        return self.client.volume_ratio(self._pair(symbol), config.INTERVAL, 50)
 
     def current_position(self):
         pair, vol, entry = self.client.any_long_position()

@@ -128,6 +128,20 @@ class MexcClient:
                 up += v
         return up / tot if tot > 0 else 0.5
 
+    def volume_ratio(self, symbol, interval, limit):
+        """Recent volume vs its average: mean of the last 3 candles / mean over
+        the window. >1 = activity picking up. Public."""
+        rows = self._request("GET", "/api/v3/klines",
+                            {"symbol": symbol,
+                             "interval": self._INTERVALS[interval],
+                             "limit": limit})
+        vols = [float(r[5]) for r in rows]
+        if len(vols) < 5:
+            return 1.0
+        avg = sum(vols) / len(vols)
+        recent = sum(vols[-3:]) / 3
+        return recent / avg if avg > 0 else 1.0
+
     def get_account(self):
         """Your balances. A signed READ -- proves your keys work. Trades nothing."""
         return self._request("GET", "/api/v3/account", signed=True)
