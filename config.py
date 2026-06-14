@@ -58,7 +58,10 @@ TAKE_PROFIT_PCT = 0.10
 #              down) and sells when it looks "overbought." (Bargain hunting.)
 #   "breakout" Donchian breakout. Buys when price punches above its recent
 #              high, sells when it drops below its recent low. (Momentum.)
-STRATEGY = "sma"
+#   "pro"      The "experienced" one. Only buys when trend, momentum, AND price
+#              all agree, so it trades less and avoids many bad entries -- the
+#              biggest way to lower risk. Exits at the first sign of trouble.
+STRATEGY = "pro"
 
 # --- settings for the "sma" strategy ---
 # A moving average is the average price over the last N days. We track a FAST

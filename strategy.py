@@ -101,6 +101,59 @@ def _decide_rsi(prices, holding):
     return "HOLD", f"RSI {value:.0f}; waiting for an oversold dip"
 
 
+def stdev_of_returns(prices, window):
+    """A simple volatility gauge: how bumpy recent day-to-day moves have been.
+    Higher = riskier. None if not enough data."""
+    if len(prices) < window + 1:
+        return None
+    rets = [(prices[i] / prices[i - 1] - 1) for i in range(-window, 0)]
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / len(rets)
+    return var ** 0.5
+
+
+def _decide_pro(prices, holding):
+    """A more "experienced" strategy: it only buys when SEVERAL signals agree,
+    which means it trades less often and avoids many bad entries -- the single
+    biggest way to lower risk. It combines:
+
+      * trend       (fast average just crossed above slow -> uptrend starting)
+      * momentum    (RSI is rising but NOT yet overbought)
+      * sanity      (price is above the slow average)
+
+    It exits on the first sign of trouble: trend breaking down, or the price
+    looking overbought (lock in gains). The stop-loss / take-profit safety net
+    in decide() still applies on top of all this.
+    """
+    if len(prices) < config.SMA_SLOW + 1:
+        return "HOLD", "not enough price history yet"
+
+    fast_now = simple_moving_average(prices, config.SMA_FAST)
+    slow_now = simple_moving_average(prices, config.SMA_SLOW)
+    fast_prev = simple_moving_average(prices[:-1], config.SMA_FAST)
+    slow_prev = simple_moving_average(prices[:-1], config.SMA_SLOW)
+    rsi_now = rsi(prices, config.RSI_PERIOD)
+    price_now = prices[-1]
+
+    if holding:
+        # Exit reason 1: the uptrend broke (fast crossed back below slow).
+        if fast_prev >= slow_prev and fast_now < slow_now:
+            return "SELL", "trend broke down (fast crossed below slow)"
+        # Exit reason 2: momentum overheated -> lock in the gain.
+        if rsi_now is not None and rsi_now >= config.RSI_SELL:
+            return "SELL", f"overbought (RSI {rsi_now:.0f}); locking in gains"
+        return "HOLD", "trend healthy; holding"
+
+    # Entry: require ALL of these to agree before risking cash.
+    crossover_up = fast_prev <= slow_prev and fast_now > slow_now
+    momentum_ok = rsi_now is not None and 50 <= rsi_now < config.RSI_SELL
+    above_trend = price_now > slow_now
+    if crossover_up and momentum_ok and above_trend:
+        return "BUY", (f"all signals agree: uptrend start, RSI {rsi_now:.0f}, "
+                       f"price above trend")
+    return "HOLD", "waiting for multiple signals to agree (fewer, safer trades)"
+
+
 def _decide_breakout(prices, holding):
     n = config.DONCHIAN_DAYS
     if len(prices) < n + 1:
@@ -123,6 +176,7 @@ STRATEGIES = {
     "sma": _decide_sma,
     "rsi": _decide_rsi,
     "breakout": _decide_breakout,
+    "pro": _decide_pro,
 }
 
 
