@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
 
 import broker as broker_mod
 import config
@@ -32,6 +33,35 @@ import notify
 import strategy
 
 HEARTBEAT_FILE = "last_heartbeat.json"   # remembers when we last sent a status
+LAST_TRADE_FILE = "last_trade.json"      # date of the last trade (for max-idle)
+SHOW_TOP_SETUPS = 12                      # how many candidate setups to detail
+
+
+def _today():
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _record_trade_today():
+    with open(LAST_TRADE_FILE, "w") as f:
+        json.dump({"date": _today()}, f)
+
+
+def _idle_days():
+    """Days since the last trade. Starts the clock today on the first ever run."""
+    if not os.path.exists(LAST_TRADE_FILE):
+        _record_trade_today()
+        return 0
+    try:
+        with open(LAST_TRADE_FILE) as f:
+            last = datetime.strptime(json.load(f)["date"], "%Y-%m-%d").date()
+        return (datetime.now().date() - last).days
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _should_force_trade():
+    """True if we've gone MAX_IDLE_DAYS without trading (last-resort entry)."""
+    return config.MAX_IDLE_DAYS > 0 and _idle_days() >= config.MAX_IDLE_DAYS
 
 
 def _heartbeat_due(minutes):
@@ -122,41 +152,58 @@ def _scan_and_maybe_enter(broker):
         print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
         return f"In cash ${cash:,.2f}; coin-list error", False
 
-    best = None       # (score, symbol, price, reason)
-    candidates = 0    # coins with a raw BUY signal on the primary timeframe
     src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
+
+    # Pass 1: find every coin forming a BUY setup, ranked by strength.
+    buy_cands = []   # (score, symbol, price)
     for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
         except Exception:  # noqa: BLE001 - skip a coin we can't price
             continue
         action, _ = strategy.decide(prices, False, 0.0)
-        if action != "BUY":
-            continue
-        candidates += 1
-        # Multi-timeframe confirmation: only enter if enough timeframes agree
-        # the trend is up. Trade WITH the bigger market structure.
+        if action == "BUY":
+            buy_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
+    buy_cands.sort(reverse=True)
+
+    # Pass 2: SHOW each setup (strength + how many timeframes agree), and pick
+    # the strongest one that passes multi-timeframe confirmation.
+    best = None       # (symbol, price, reason)
+    shown = buy_cands[:SHOW_TOP_SETUPS]
+    if not buy_cands:
+        print("  Setups forming: none right now.")
+    else:
+        print(f"  Setups forming ({len(buy_cands)}; showing top {len(shown)}):")
+    for score, symbol, price in shown:
         agree, checked = _count_trend_agreement(broker, symbol)
-        if agree < config.MIN_TF_AGREE:
-            print(f"    {symbol:<8} BUY but {agree}/{checked} timeframes agree; skip")
-            continue
-        score = strategy.momentum_score(prices)
-        print(f"    {symbol:<8} BUY confirmed ({agree}/{checked} timeframes, "
-              f"strength {score * 100:+.1f}%)")
-        if best is None or score > best[0]:
-            best = (score, symbol, prices[-1], "multi-timeframe confirmed uptrend")
+        confirmed = agree >= config.MIN_TF_AGREE
+        tag = "CONFIRMED" if confirmed else f"need {config.MIN_TF_AGREE}"
+        print(f"    {symbol:<10} strength {score * 100:+6.2f}%   "
+              f"trend {agree}/{checked} timeframes   [{tag}]")
+        if confirmed and best is None:
+            best = (symbol, price, "multi-timeframe confirmed uptrend")
+
+    # Last resort: don't sit idle past MAX_IDLE_DAYS -- take the best raw setup.
+    if best is None and buy_cands and _should_force_trade():
+        _, symbol, price = buy_cands[0]
+        best = (symbol, price,
+                f"FORCED: {_idle_days()} days idle (>= {config.MAX_IDLE_DAYS})")
+        print(f"  No confirmed setup, but idle {_idle_days()} days -> forcing "
+              f"best available: {symbol}")
 
     if best is None:
-        print(f"  {candidates} buy-signals, none confirmed. Staying in cash.\n")
-        return (f"In cash ${cash:,.2f}; no confirmed setup "
-                f"({len(universe)} scanned)"), False
+        idle = f" | idle {_idle_days()}d" if config.MAX_IDLE_DAYS else ""
+        print(f"  None confirmed. Staying in cash.{idle}\n")
+        return (f"In cash ${cash:,.2f}; {len(buy_cands)} setups, none confirmed"
+                f"{idle}"), False
 
-    _, symbol, price, reason = best
+    symbol, price, reason = best
     print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
     msg = broker.open(symbol, price)
     print(f"  Executed : {msg or 'nothing (floor/size limit)'}")
     if msg:
+        _record_trade_today()
         notify.send(msg, title=f"Bot: entered {symbol}")
         return f"Entered {symbol} @ ${price:,.4f}", True
     return f"In cash ${cash:,.2f}; setup found but size/floor blocked it", False

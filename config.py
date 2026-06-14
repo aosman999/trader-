@@ -109,6 +109,14 @@ TIMEFRAMES = [c.strip() for c in
               _s("TIMEFRAMES", "1m,5m,15m,30m,1h,4h,1d,1w").split(",") if c.strip()]
 MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 
+# DON'T SIT IDLE TOO LONG. If MAX_IDLE_DAYS > 0 and no trade has happened in that
+# many days, the bot takes the BEST available candidate even without full
+# multi-timeframe confirmation -- so it never goes longer than this without
+# trading. The clock resets on every trade. 0 = off (purely selective).
+# Note: a forced trade is lower quality than a confirmed one, so keep this
+# generous. export MAX_IDLE_DAYS="3"
+MAX_IDLE_DAYS = _i("MAX_IDLE_DAYS", "0")
+
 # ---------------------------------------------------------------------------
 # NOTIFICATIONS
 # ---------------------------------------------------------------------------
