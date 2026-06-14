@@ -26,6 +26,7 @@ import sys
 
 import broker as broker_mod
 import config
+import notify
 import strategy
 
 
@@ -43,15 +44,18 @@ def _manage_open_position(broker, pos):
     # Circuit breaker: protect the floor.
     if equity <= config.FLOOR_USD:
         print(f"  ** FLOOR REACHED ** (${equity:,.2f} <= ${config.FLOOR_USD:,.2f})")
-        print(f"  Closing to protect the floor: "
-              f"{broker.close(symbol, pos['amount'], price)}")
+        msg = broker.close(symbol, pos['amount'], price)
+        print(f"  Closing to protect the floor: {msg}")
+        notify.send(f"FLOOR hit (${equity:,.2f}). {msg}", title="Bot: floor stop")
         print("  Trading halted. Review before resuming.\n")
         return
 
     action, reason = strategy.decide(prices, True, pos["entry"])
     print(f"  Decision : {action}  --  {reason}")
     if action == "SELL":
-        print(f"  Executed : {broker.close(symbol, pos['amount'], price)}")
+        msg = broker.close(symbol, pos['amount'], price)
+        print(f"  Executed : {msg}")
+        notify.send(msg, title=f"Bot: closed {symbol}")
     else:
         print("  Executed : holding (no change)")
 
@@ -87,7 +91,10 @@ def _scan_and_maybe_enter(broker):
 
     _, symbol, price, reason = best
     print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
-    print(f"  Executed : {broker.open(symbol, price) or 'nothing (floor/size limit)'}")
+    msg = broker.open(symbol, price)
+    print(f"  Executed : {msg or 'nothing (floor/size limit)'}")
+    if msg:
+        notify.send(msg, title=f"Bot: entered {symbol}")
 
 
 def main():
