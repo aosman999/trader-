@@ -83,6 +83,17 @@ def _heartbeat_due(minutes):
     return False
 
 
+def _order_error_hint(exc):
+    """Turn an order exception into a short, human message -- with a clear hint
+    if the exchange is blocking order placement (a common MEXC restriction)."""
+    text = str(exc)
+    if "403" in text or "Access Denied" in text:
+        return ("EXCHANGE BLOCKED the order (403 Access Denied). Futures order "
+                "placement via API is not permitted on this account/region. "
+                "No code fix -- consider spot, or another exchange.")
+    return str(exc).splitlines()[0][:160]
+
+
 def _count_trend_agreement(broker, symbol):
     """Check the trend on every timeframe in config.TIMEFRAMES. Returns
     (how_many_are_in_uptrend, how_many_we_could_check)."""
@@ -128,7 +139,14 @@ def _manage_open_position(broker, pos):
     print(f"  Peak     : ${high_water:,.2f}")
     print(f"  Decision : {action}  --  {reason}")
     if action == "SELL":
-        msg = broker.close(symbol, pos['amount'], price)
+        try:
+            msg = broker.close(symbol, pos['amount'], price)
+        except Exception as exc:  # noqa: BLE001
+            hint = _order_error_hint(exc)
+            print(f"  Close FAILED: {hint}")
+            notify.send(f"Close failed for {symbol}: {hint}",
+                        title="Bot: close FAILED")
+            return f"Close failed: {hint[:80]}", False
         print(f"  Executed : {msg}")
         notify.send(msg, title=f"Bot: closed {symbol}")
         return f"Closed {symbol} at {pnl:+.1f}%", True
@@ -200,7 +218,13 @@ def _scan_and_maybe_enter(broker):
 
     symbol, price, reason = best
     print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
-    msg = broker.open(symbol, price)
+    try:
+        msg = broker.open(symbol, price)
+    except Exception as exc:  # noqa: BLE001 - a failed order must not crash the run
+        hint = _order_error_hint(exc)
+        print(f"  Order FAILED: {hint}")
+        notify.send(f"Order failed for {symbol}: {hint}", title="Bot: order FAILED")
+        return f"Order failed: {hint[:80]}", False
     print(f"  Executed : {msg or 'nothing (floor/size limit)'}")
     if msg:
         _record_trade_today()
