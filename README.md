@@ -29,6 +29,9 @@ behaves over time **without risking a single real cent**.
 | `run_daily.sh`     | Wrapper the scheduler calls; logs each run to `bot.log`.           |
 | `setup_schedule.sh`| One command to run the bot automatically every day (macOS/Linux). |
 | `SCHEDULING.md`    | How to automate the daily run (macOS/Linux **and** Windows).      |
+| `mexc.py`          | Safe-by-default client for the MEXC exchange (real account).      |
+| `check_mexc.py`    | Proves your MEXC connection works **without trading**.            |
+| `MEXC_SETUP.md`    | Step-by-step guide to connect MEXC safely (keys, env vars, test). |
 | `tests/`           | Quick self-tests that prove the logic works (no internet needed). |
 
 It uses **only Python's standard library** — nothing to install.

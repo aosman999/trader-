@@ -23,8 +23,10 @@ SYMBOL = "BTC"
 # ---------------------------------------------------------------------------
 
 # How much fake cash the bot starts with the very first time it runs.
-# After that, the real balance is remembered in portfolio.json.
-STARTING_CASH = 10_000.0  # dollars
+# Set to $20 to mirror the real-money plan, so the paper results reflect what
+# that size of account would actually do (fees and small-order limits included).
+# After the first run, the balance is remembered in portfolio.json.
+STARTING_CASH = 20.0  # dollars
 
 # ---------------------------------------------------------------------------
 # RISK MANAGEMENT  (the most important part)
