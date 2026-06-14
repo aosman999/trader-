@@ -33,8 +33,12 @@ BASE_URL = "https://contract.mexc.com"
 
 # ---- Hard safety limits (the whole point of this file) ----------------------
 MAX_LEVERAGE = 10        # absolute ceiling; nothing may exceed this
-DRY_RUN_DEFAULT = True   # True = build/log orders but send nothing
-MAX_MARGIN_USD = 10.0    # most margin any single trade may use
+# Dry-run is ON unless you set  export DRY_RUN="false"  in keys.env. While on,
+# orders are built/logged but never sent. Going live is a keys.env change now,
+# so updates never silently flip it.
+DRY_RUN_DEFAULT = os.environ.get("DRY_RUN", "true").strip().lower() not in (
+    "false", "0", "no", "off")
+MAX_MARGIN_USD = float(os.environ.get("MAX_MARGIN_USD", "10"))   # cap per trade
 ISOLATED = 1             # openType 1 = isolated margin (2 = cross; we never use)
 
 # MEXC futures order "side" codes:

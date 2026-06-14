@@ -28,8 +28,10 @@ import urllib.request
 BASE_URL = "https://api.mexc.com"
 
 # ---- Hard safety limits (change deliberately, with your eyes open) ----------
-DRY_RUN_DEFAULT = True       # True = validate orders only, never trade for real
-MAX_ORDER_USD = 10.0         # refuse any single order larger than this
+# Dry-run is ON unless you set  export DRY_RUN="false"  in keys.env.
+DRY_RUN_DEFAULT = os.environ.get("DRY_RUN", "true").strip().lower() not in (
+    "false", "0", "no", "off")
+MAX_ORDER_USD = float(os.environ.get("MAX_ORDER_USD", "10"))  # refuse bigger
 
 
 class MexcError(Exception):

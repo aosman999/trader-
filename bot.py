@@ -21,13 +21,36 @@ HOW TO RUN:
     python3 bot.py --reset    # erase the paper portfolio and start fresh
 """
 
+import json
 import os
 import sys
+import time
 
 import broker as broker_mod
 import config
 import notify
 import strategy
+
+HEARTBEAT_FILE = "last_heartbeat.json"   # remembers when we last sent a status
+
+
+def _heartbeat_due(minutes):
+    """True at most once per `minutes`, so a status push isn't sent every run."""
+    if minutes <= 0:
+        return False
+    now = time.time()
+    last = 0.0
+    if os.path.exists(HEARTBEAT_FILE):
+        try:
+            with open(HEARTBEAT_FILE) as f:
+                last = json.load(f).get("ts", 0.0)
+        except Exception:  # noqa: BLE001
+            last = 0.0
+    if now - last >= minutes * 60:
+        with open(HEARTBEAT_FILE, "w") as f:
+            json.dump({"ts": now}, f)
+        return True
+    return False
 
 
 def _count_trend_agreement(broker, symbol):
@@ -47,12 +70,14 @@ def _count_trend_agreement(broker, symbol):
 
 
 def _manage_open_position(broker, pos):
-    """We already hold a coin: check the floor, then decide sell/hold on it."""
+    """We already hold a coin: check the floor, then decide sell/hold on it.
+    Returns (status_text, a_trade_happened)."""
     symbol = pos["symbol"]
     prices = broker.get_prices(symbol)
     price = prices[-1]
     value = broker.position_value(symbol, pos["amount"], price)
     equity = broker.cash() + value
+    pnl = (price / pos["entry"] - 1) * 100 if pos["entry"] else 0.0
 
     print(f"\n  Holding  : {symbol} (entry ${pos['entry']:,.2f})")
     print(f"  Price now: ${price:,.2f}   Equity: ${equity:,.2f}")
@@ -64,7 +89,7 @@ def _manage_open_position(broker, pos):
         print(f"  Closing to protect the floor: {msg}")
         notify.send(f"FLOOR hit (${equity:,.2f}). {msg}", title="Bot: floor stop")
         print("  Trading halted. Review before resuming.\n")
-        return
+        return f"Floor stop: closed {symbol}", True
 
     # Update the peak-since-entry, then decide (the trailing stop uses it).
     high_water = broker.update_high_water(symbol, pos["entry"], price)
@@ -76,17 +101,20 @@ def _manage_open_position(broker, pos):
         msg = broker.close(symbol, pos['amount'], price)
         print(f"  Executed : {msg}")
         notify.send(msg, title=f"Bot: closed {symbol}")
-    else:
-        print("  Executed : holding (no change)")
+        return f"Closed {symbol} at {pnl:+.1f}%", True
+    print("  Executed : holding (no change)")
+    return (f"Holding {symbol}: {pnl:+.1f}% (now ${price:,.4f}, "
+            f"peak ${high_water:,.4f})"), False
 
 
 def _scan_and_maybe_enter(broker):
-    """We're in cash: scan the watchlist and enter the best qualifying coin."""
+    """We're in cash: scan the watchlist and enter the best qualifying coin.
+    Returns (status_text, a_trade_happened)."""
     cash = broker.cash()
     print(f"\n  In cash  : ${cash:,.2f}")
     if cash <= config.FLOOR_USD:
         print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
-        return
+        return f"At floor ${cash:,.2f}; not trading", False
 
     best = None   # (score, symbol, price, reason)
     print(f"  Scanning {len(config.WATCHLIST)} coins on the {config.INTERVAL} "
@@ -117,7 +145,7 @@ def _scan_and_maybe_enter(broker):
 
     if best is None:
         print("  No coin has a high-quality setup right now. Staying in cash.\n")
-        return
+        return f"In cash ${cash:,.2f}; no setup ({len(config.WATCHLIST)} scanned)", False
 
     _, symbol, price, reason = best
     print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
@@ -125,6 +153,8 @@ def _scan_and_maybe_enter(broker):
     print(f"  Executed : {msg or 'nothing (floor/size limit)'}")
     if msg:
         notify.send(msg, title=f"Bot: entered {symbol}")
+        return f"Entered {symbol} @ ${price:,.4f}", True
+    return f"In cash ${cash:,.2f}; setup found but size/floor blocked it", False
 
 
 def main():
@@ -156,11 +186,16 @@ def main():
         return
 
     if pos:
-        _manage_open_position(broker, pos)
+        status, traded = _manage_open_position(broker, pos)
     else:
-        _scan_and_maybe_enter(broker)
+        status, traded = _scan_and_maybe_enter(broker)
 
     print(f"  Cash available: ${broker.cash():,.2f}\n")
+
+    # Periodic status notification ("what it found"). A trade this run already
+    # sent its own alert, so only send the heartbeat when nothing traded.
+    if not traded and _heartbeat_due(config.NOTIFY_STATUS_MINUTES):
+        notify.send(status, title="Bot status")
 
 
 if __name__ == "__main__":
