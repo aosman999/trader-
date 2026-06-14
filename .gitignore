@@ -2,6 +2,7 @@
 portfolio.json
 trades.csv
 bot.log
+mexc_entry.json
 
 # Python
 __pycache__/

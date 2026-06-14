@@ -18,6 +18,14 @@ Change the numbers below to experiment. Every setting is explained.
 # We always trade it against US dollars (USD/USDT).
 SYMBOL = "BTC"
 
+# WHERE trades happen:
+#   "paper" -> fake money (the safe default; use this for weeks first)
+#   "mexc"  -> your REAL MEXC account, via mexc.py
+# IMPORTANT: even with "mexc", nothing real trades until you turn OFF dry-run
+# in mexc.py (DRY_RUN_DEFAULT). Until then it only validates orders. Read
+# MEXC_SETUP.md before changing this.
+BROKER = "paper"
+
 # ---------------------------------------------------------------------------
 # YOUR (PRETEND) MONEY
 # ---------------------------------------------------------------------------

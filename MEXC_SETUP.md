@@ -75,7 +75,45 @@ Do **not** do this until you've paper-traded for weeks and passed Step 3.
    and confirm it on the MEXC website.
 3. Keep `MAX_ORDER_USD` tight. Raise limits only slowly, deliberately.
 
-The next coding step (once Step 3 passes for you) is to wire this MEXC client
-into the daily bot as a selectable "broker," so the same `pro` strategy you've
-been paper-testing can run against the real account — still gated behind
-`dry_run`. Tell me when `check_mexc.py` passes and we'll do that part.
+## Step 4 — Point the bot at MEXC (still safe)
+
+The bot already supports MEXC as a "broker." In `config.py` set:
+
+```python
+BROKER = "mexc"
+```
+
+Now `python3 bot.py` will use MEXC's real prices and your real balance to
+decide — but because `DRY_RUN_DEFAULT = True` in `mexc.py`, it only *validates*
+orders and **places nothing**. You'll see lines like:
+
+```
+DRY-RUN: would BUY ~$10.00 of BTC (nothing placed)
+```
+
+Run it this way for a while and confirm the decisions look sane.
+
+## Step 5 — Add it to your daily routine
+
+Same scheduler as paper trading (full guide in `SCHEDULING.md`):
+
+```bash
+./setup_schedule.sh            # runs daily at 09:00
+./setup_schedule.sh 18 30      # or a time you choose
+```
+
+While `BROKER = "mexc"` and dry-run is on, the routine validates a trade each
+day and places nothing — a safe live rehearsal. Output goes to `bot.log`.
+
+## Step 6 — Going live (only when you're truly ready)
+
+Do **not** do this until Steps 3–5 have run cleanly for a while.
+
+1. In `mexc.py`, set `DRY_RUN_DEFAULT = False`. Keep `MAX_ORDER_USD` small.
+2. Run `python3 bot.py` **by hand** and watch the first real order. Confirm it
+   on the MEXC website.
+3. Only after that, let the daily routine carry it.
+
+You can flip back to safety at any moment: set `DRY_RUN_DEFAULT = True` again,
+or `BROKER = "paper"`. Tell me when you reach Step 3 and we'll go through the
+go-live carefully together.

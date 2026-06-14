@@ -86,6 +86,13 @@ class MexcClient:
                              {"symbol": symbol})
         return float(data["price"])
 
+    def get_daily_closes(self, symbol, days):
+        """Daily closing prices (oldest first) straight from MEXC. Public.
+        Used so the strategy decides on MEXC's own prices."""
+        rows = self._request("GET", "/api/v3/klines",
+                            {"symbol": symbol, "interval": "1d", "limit": days})
+        return [float(r[4]) for r in rows]   # index 4 = close
+
     # -- private (keys needed) -----------------------------------------------
 
     def get_account(self):
