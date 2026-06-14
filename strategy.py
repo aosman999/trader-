@@ -55,10 +55,39 @@ def rsi(prices, period):
 
 def trend_up(prices):
     """True if this timeframe is in an uptrend (fast average above slow).
-    Used for multi-timeframe confirmation before entering a trade."""
+    Used for multi-timeframe confirmation before a LONG."""
     fast = simple_moving_average(prices, config.SMA_FAST)
     slow = simple_moving_average(prices, config.SMA_SLOW)
     return fast is not None and slow is not None and fast > slow
+
+
+def trend_down(prices):
+    """True if this timeframe is in a downtrend (fast average below slow).
+    Used for multi-timeframe confirmation before a SHORT."""
+    fast = simple_moving_average(prices, config.SMA_FAST)
+    slow = simple_moving_average(prices, config.SMA_SLOW)
+    return fast is not None and slow is not None and fast < slow
+
+
+def short_signal(prices):
+    """True if a confirmed SHORT setup is forming -- the exact mirror image of the
+    'pro' long entry: a fresh downward crossover, downward momentum (not yet
+    oversold), price below both averages, and the slow average already falling."""
+    if len(prices) < config.SMA_SLOW + 1:
+        return False
+    fast_now = simple_moving_average(prices, config.SMA_FAST)
+    slow_now = simple_moving_average(prices, config.SMA_SLOW)
+    fast_prev = simple_moving_average(prices[:-1], config.SMA_FAST)
+    slow_prev = simple_moving_average(prices[:-1], config.SMA_SLOW)
+    rsi_now = rsi(prices, config.RSI_PERIOD)
+    price_now = prices[-1]
+
+    crossover_down = fast_prev >= slow_prev and fast_now < slow_now
+    momentum_ok = rsi_now is not None and config.RSI_BUY < rsi_now <= 48
+    below_trend = price_now < slow_now and price_now < fast_now
+    slow_past = simple_moving_average(prices[:-5], config.SMA_SLOW)
+    trend_falling = slow_past is not None and slow_now < slow_past
+    return crossover_down and momentum_ok and below_trend and trend_falling
 
 
 def _risk_exit(price_now, entry_price, high_water):

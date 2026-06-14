@@ -48,39 +48,45 @@ def _fmt_price(p):
     return f"{p:.6f}"
 
 
-def _send_futures_signal(symbol, entry):
-    """Text the user a futures trade to place BY HAND (MEXC blocks futures API).
-    Deduped so the same signal isn't re-sent every minute."""
+def _send_futures_signal(symbol, entry, direction):
+    """Text the user a futures trade (LONG or SHORT) to place BY HAND (MEXC
+    blocks futures API). Deduped so the same signal isn't re-sent every minute."""
     if not config.FUTURES_SIGNALS:
         return
-    last_sym, last_ts = None, 0.0
+    key = f"{symbol}/{direction}"
+    last_key, last_ts = None, 0.0
     if os.path.exists(LAST_SIGNAL_FILE):
         try:
             with open(LAST_SIGNAL_FILE) as f:
                 d = json.load(f)
-            last_sym, last_ts = d.get("symbol"), d.get("ts", 0.0)
+            last_key, last_ts = d.get("key"), d.get("ts", 0.0)
         except Exception:  # noqa: BLE001
             pass
-    if symbol == last_sym and time.time() - last_ts < SIGNAL_COOLDOWN_MIN * 60:
+    if key == last_key and time.time() - last_ts < SIGNAL_COOLDOWN_MIN * 60:
         return  # already texted this one recently
 
     lev = config.LEVERAGE
-    sl = entry * (1 - config.STOP_LOSS_PCT)
-    tp = entry * (1 + config.SIGNAL_TP_PCT)
+    tp_pct = config.SIGNAL_TP_PCT
+    sl_pct = config.STOP_LOSS_PCT
+    if direction == "LONG":
+        tp = entry * (1 + tp_pct)        # profit is above, stop is below
+        sl = entry * (1 - sl_pct)
+    else:  # SHORT -- mirror image: profit BELOW entry, stop ABOVE
+        tp = entry * (1 - tp_pct)
+        sl = entry * (1 + sl_pct)
     msg = (f"FUTURES SIGNAL -- place this by hand:\n"
            f"Coin: {symbol}\n"
-           f"Direction: LONG\n"
+           f"Direction: {direction}\n"
            f"Leverage: {lev}x (isolated)\n"
            f"Entry: ~${_fmt_price(entry)}\n"
-           f"Take-profit: ${_fmt_price(tp)} (+{config.SIGNAL_TP_PCT * 100:.0f}%)\n"
-           f"Stop-loss: ${_fmt_price(sl)} (-{config.STOP_LOSS_PCT * 100:.0f}%)\n"
+           f"Take-profit: ${_fmt_price(tp)} ({tp_pct * 100:.0f}% in your favour)\n"
+           f"Stop-loss: ${_fmt_price(sl)} ({sl_pct * 100:.0f}% against you)\n"
            f"Risk only a small part of your futures balance.")
-    notify.send(msg, title=f"Futures signal: LONG {symbol}")
+    notify.send(msg, title=f"Futures signal: {direction} {symbol}")
     with open(LAST_SIGNAL_FILE, "w") as f:
-        json.dump({"symbol": symbol, "ts": time.time()}, f)
-    print(f"  Futures SIGNAL texted: LONG {symbol} @ ${_fmt_price(entry)} "
-          f"({lev}x, TP +{config.SIGNAL_TP_PCT * 100:.0f}%, "
-          f"SL -{config.STOP_LOSS_PCT * 100:.0f}%)")
+        json.dump({"key": key, "ts": time.time()}, f)
+    print(f"  Futures SIGNAL texted: {direction} {symbol} @ ${_fmt_price(entry)} "
+          f"({lev}x, TP {tp_pct * 100:.0f}%, SL {sl_pct * 100:.0f}%)")
 
 
 def _today():
@@ -140,9 +146,9 @@ def _order_error_hint(exc):
     return str(exc).splitlines()[0][:160]
 
 
-def _count_trend_agreement(broker, symbol):
-    """Check the trend on every timeframe in config.TIMEFRAMES. Returns
-    (how_many_are_in_uptrend, how_many_we_could_check)."""
+def _count_agreement(broker, symbol, trend_fn):
+    """Across every timeframe in config.TIMEFRAMES, count how many match the
+    given trend (trend_up for longs, trend_down for shorts)."""
     agree = 0
     checked = 0
     for tf in config.TIMEFRAMES:
@@ -151,7 +157,7 @@ def _count_trend_agreement(broker, symbol):
         except Exception:  # noqa: BLE001 - a timeframe we can't fetch is skipped
             continue
         checked += 1
-        if strategy.trend_up(prices):
+        if trend_fn(prices):
             agree += 1
     return agree, checked
 
@@ -201,22 +207,41 @@ def _manage_open_position(broker, pos):
             f"peak ${high_water:,.4f})"), False
 
 
+def _confirm_best(broker, cands, trend_fn, direction):
+    """From ranked candidates, PRINT the top ones and return (score, symbol,
+    price) of the strongest that passes multi-timeframe confirmation, else None."""
+    best = None
+    for score, symbol, price in cands[:SHOW_TOP_SETUPS]:
+        agree, checked = _count_agreement(broker, symbol, trend_fn)
+        confirmed = agree >= config.MIN_TF_AGREE
+        tag = "CONFIRMED" if confirmed else f"need {config.MIN_TF_AGREE}"
+        print(f"    {direction:<5} {symbol:<10} strength {score * 100:+6.2f}%   "
+              f"trend {agree}/{checked} timeframes   [{tag}]")
+        if confirmed and best is None:
+            best = (score, symbol, price)
+    return best
+
+
 def _scan_setups(broker):
     """Scan the whole universe and PRINT every forming setup. Returns
-    (best, buy_cands) where best = (symbol, price, reason) of the strongest
-    multi-timeframe-confirmed setup, or None. Runs regardless of whether spot is
-    holding -- so futures signals keep coming even while a spot trade is open."""
+    (best_long, long_cands, best_signal):
+      best_long   = (symbol, price, reason) confirmed LONG, for the spot auto-trade
+      long_cands  = ranked raw long candidates (for the max-idle fallback)
+      best_signal = (symbol, price, direction) strongest confirmed LONG *or* SHORT,
+                    for the futures signal (shorts only scanned when signals are on)
+    Runs every minute even while a spot trade is open, so signals keep coming."""
     try:
         universe = broker.universe()
     except Exception as exc:  # noqa: BLE001
         print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
-        return None, []
+        return None, [], None
 
     src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
 
-    # Pass 1: every coin forming a BUY setup, ranked by strength.
-    buy_cands = []   # (score, symbol, price)
+    # Pass 1: collect long setups (and short setups too, if signals are enabled).
+    long_cands = []    # (score, symbol, price)
+    short_cands = []   # (score, symbol, price)
     for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
@@ -224,26 +249,47 @@ def _scan_setups(broker):
             continue
         action, _ = strategy.decide(prices, False, 0.0)
         if action == "BUY":
-            buy_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
-    buy_cands.sort(reverse=True)
+            long_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
+        elif config.FUTURES_SIGNALS and strategy.short_signal(prices):
+            # short strength: how far the fast average sits BELOW the slow.
+            short_cands.append((-strategy.momentum_score(prices), symbol, prices[-1]))
+    long_cands.sort(reverse=True)
+    short_cands.sort(reverse=True)
 
-    # Pass 2: SHOW each setup (strength + timeframe agreement), pick the strongest
-    # one that passes multi-timeframe confirmation.
-    best = None       # (symbol, price, reason)
-    shown = buy_cands[:SHOW_TOP_SETUPS]
-    if not buy_cands:
+    total = len(long_cands) + len(short_cands)
+    if not total:
         print("  Setups forming: none right now.")
     else:
-        print(f"  Setups forming ({len(buy_cands)}; showing top {len(shown)}):")
-    for score, symbol, price in shown:
-        agree, checked = _count_trend_agreement(broker, symbol)
-        confirmed = agree >= config.MIN_TF_AGREE
-        tag = "CONFIRMED" if confirmed else f"need {config.MIN_TF_AGREE}"
-        print(f"    {symbol:<10} strength {score * 100:+6.2f}%   "
-              f"trend {agree}/{checked} timeframes   [{tag}]")
-        if confirmed and best is None:
-            best = (symbol, price, "multi-timeframe confirmed uptrend")
-    return best, buy_cands
+        print(f"  Setups forming (long {len(long_cands)}, short "
+              f"{len(short_cands)}):")
+
+    # Pass 2: confirm longs (uptrend agreement) and shorts (downtrend agreement).
+    best_long_full = _confirm_best(broker, long_cands, strategy.trend_up, "LONG")
+    best_short_full = None
+    if config.FUTURES_SIGNALS:
+        best_short_full = _confirm_best(broker, short_cands, strategy.trend_down,
+                                        "SHORT")
+
+    best_long = None
+    if best_long_full:
+        best_long = (best_long_full[1], best_long_full[2],
+                     "multi-timeframe confirmed uptrend")
+
+    # Best futures signal = whichever confirmed setup (long or short) is strongest.
+    best_signal = None  # (symbol, price, direction)
+    options = []
+    if best_long_full:
+        options.append((best_long_full[0], best_long_full[1], best_long_full[2],
+                        "LONG"))
+    if best_short_full:
+        options.append((best_short_full[0], best_short_full[1],
+                        best_short_full[2], "SHORT"))
+    if options:
+        options.sort(reverse=True)
+        _, sym, prc, direction = options[0]
+        best_signal = (sym, prc, direction)
+
+    return best_long, long_cands, best_signal
 
 
 def _maybe_enter_spot(broker, best, buy_cands):
@@ -314,19 +360,19 @@ def main():
         print(f"\nCould not reach the account:\n  {exc}")
         return
 
-    # Always scan for setups -- this drives BOTH the spot auto-trade and the
-    # (optional) futures signal, and runs even while a spot trade is open.
-    best, buy_cands = _scan_setups(broker)
+    # Always scan -- this drives the spot auto-trade AND the futures signal, and
+    # runs even while a spot trade is open.
+    best_long, long_cands, best_signal = _scan_setups(broker)
 
-    # Futures signal: text the best setup to place by hand (never auto-traded).
-    if config.FUTURES_SIGNALS and best:
-        _send_futures_signal(best[0], best[1])
+    # Futures signal: text the best LONG or SHORT setup to place by hand.
+    if config.FUTURES_SIGNALS and best_signal:
+        _send_futures_signal(best_signal[0], best_signal[1], best_signal[2])
 
-    # Spot side: manage an open position, or enter the best setup.
+    # Spot side (long-only: buys to enter, sells to exit).
     if pos:
         status, traded = _manage_open_position(broker, pos)
     else:
-        status, traded = _maybe_enter_spot(broker, best, buy_cands)
+        status, traded = _maybe_enter_spot(broker, best_long, long_cands)
 
     print(f"  Cash available: ${broker.cash():,.2f}\n")
 
