@@ -63,6 +63,10 @@ class PaperBroker:
         self.use_demo = use_demo
         self.state = portfolio.load()
 
+    def universe(self):
+        # Paper has no live coin list; use the watchlist or a default of majors.
+        return config.WATCHLIST or ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+
     def get_prices(self, symbol, interval=None):
         if self.use_demo:
             return data.demo_closes(config.HISTORY_DAYS, seed=_demo_seed(symbol))
@@ -111,6 +115,11 @@ class MexcBroker:
     def __init__(self):
         import mexc
         self.client = mexc.MexcClient()
+
+    def universe(self):
+        if config.WATCHLIST:
+            return config.WATCHLIST
+        return self.client.list_usdt_symbols(top=config.MAX_SCAN)
 
     def get_prices(self, symbol, interval=None):
         return self.client.get_closes(symbol + "USDT",
@@ -189,6 +198,11 @@ class MexcFuturesBroker:
     @staticmethod
     def _pair(symbol):
         return symbol + "_USDT"
+
+    def universe(self):
+        if config.WATCHLIST:
+            return config.WATCHLIST
+        return self.client.list_usdt_symbols(top=config.MAX_SCAN)
 
     def get_prices(self, symbol, interval=None):
         return self.client.get_closes(self._pair(symbol),

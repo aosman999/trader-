@@ -116,36 +116,41 @@ def _scan_and_maybe_enter(broker):
         print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
         return f"At floor ${cash:,.2f}; not trading", False
 
-    best = None   # (score, symbol, price, reason)
-    print(f"  Scanning {len(config.WATCHLIST)} coins on the {config.INTERVAL} "
-          f"timeframe...")
-    for symbol in config.WATCHLIST:
+    try:
+        universe = broker.universe()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
+        return f"In cash ${cash:,.2f}; coin-list error", False
+
+    best = None       # (score, symbol, price, reason)
+    candidates = 0    # coins with a raw BUY signal on the primary timeframe
+    src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
+    print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
+    for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
-        except Exception as exc:  # noqa: BLE001 - skip a coin we can't price
-            print(f"    {symbol:<5} skipped ({str(exc).splitlines()[0][:40]})")
+        except Exception:  # noqa: BLE001 - skip a coin we can't price
             continue
-        action, reason = strategy.decide(prices, False, 0.0)
+        action, _ = strategy.decide(prices, False, 0.0)
         if action != "BUY":
-            print(f"    {symbol:<5} {action.lower()}")
             continue
-
+        candidates += 1
         # Multi-timeframe confirmation: only enter if enough timeframes agree
         # the trend is up. Trade WITH the bigger market structure.
         agree, checked = _count_trend_agreement(broker, symbol)
         if agree < config.MIN_TF_AGREE:
-            print(f"    {symbol:<5} BUY but only {agree}/{checked} timeframes "
-                  f"agree (need {config.MIN_TF_AGREE}); skip")
+            print(f"    {symbol:<8} BUY but {agree}/{checked} timeframes agree; skip")
             continue
         score = strategy.momentum_score(prices)
-        print(f"    {symbol:<5} BUY confirmed ({agree}/{checked} timeframes, "
+        print(f"    {symbol:<8} BUY confirmed ({agree}/{checked} timeframes, "
               f"strength {score * 100:+.1f}%)")
         if best is None or score > best[0]:
-            best = (score, symbol, prices[-1], reason)
+            best = (score, symbol, prices[-1], "multi-timeframe confirmed uptrend")
 
     if best is None:
-        print("  No coin has a high-quality setup right now. Staying in cash.\n")
-        return f"In cash ${cash:,.2f}; no setup ({len(config.WATCHLIST)} scanned)", False
+        print(f"  {candidates} buy-signals, none confirmed. Staying in cash.\n")
+        return (f"In cash ${cash:,.2f}; no confirmed setup "
+                f"({len(universe)} scanned)"), False
 
     _, symbol, price, reason = best
     print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")

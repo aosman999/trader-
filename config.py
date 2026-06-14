@@ -33,11 +33,19 @@ def _i(name, default):
 # The crypto symbol used for single-coin tools (dashboard, backtest).
 SYMBOL = _s("SYMBOL", "BTC")
 
-# WATCHLIST -- the coins the live bot scans each run. It checks every one and
-# trades the SINGLE best high-quality setup, holding one position at a time.
-# Override with e.g.  export WATCHLIST="BTC,ETH,SOL,XRP,DOGE"
-WATCHLIST = [c.strip() for c in
-             _s("WATCHLIST", "BTC,ETH,SOL,XRP,DOGE").split(",") if c.strip()]
+# WATCHLIST -- which coins to scan.
+#   "AUTO" (default) = automatically use the most actively-traded USDT coins on
+#          MEXC, so the bot can trade ANY coin, not a fixed list.
+#   or an explicit list to restrict it, e.g.  export WATCHLIST="BTC,ETH,SOL"
+_WL = _s("WATCHLIST", "AUTO").strip()
+WATCHLIST_AUTO = _WL.upper() in ("AUTO", "ALL", "")
+WATCHLIST = [] if WATCHLIST_AUTO else [c.strip() for c in _WL.split(",") if c.strip()]
+
+# In AUTO mode, scan at most this many of the most-active coins each run. Keeps
+# runs fast and within MEXC's rate limits; the most liquid coins are also the
+# safest to trade (tight spreads). Raise it to cover more coins per run.
+# export MAX_SCAN="30"
+MAX_SCAN = _i("MAX_SCAN", "30")
 
 # WHERE trades happen: "paper" (fake money), "mexc" (real spot), or
 # "mexc_futures" (real leveraged futures). Set in keys.env: export BROKER="..."

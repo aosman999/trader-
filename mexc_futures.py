@@ -134,6 +134,17 @@ class MexcFuturesClient:
                              {"symbol": symbol})
         return float(data["data"]["contractSize"])
 
+    def list_usdt_symbols(self, top=None):
+        """Every USDT perpetual coin on MEXC, MOST-ACTIVE first (by 24h turnover).
+        This is what lets the bot trade ANY coin, not a fixed list. Returns base
+        symbols like ['BTC', 'ETH', ...]."""
+        data = self._request("GET", "/api/v1/contract/ticker")   # all tickers
+        rows = data.get("data", []) or []
+        usdt = [r for r in rows if str(r.get("symbol", "")).endswith("_USDT")]
+        usdt.sort(key=lambda r: float(r.get("amount24", 0) or 0), reverse=True)
+        syms = [r["symbol"].split("_")[0] for r in usdt]
+        return syms[:top] if top else syms
+
     # -- private reads (keys needed, no trading) -----------------------------
 
     def usdt_balance(self):

@@ -103,6 +103,16 @@ class MexcClient:
 
     # -- private (keys needed) -----------------------------------------------
 
+    def list_usdt_symbols(self, top=None):
+        """Every USDT spot coin on MEXC, MOST-ACTIVE first (by 24h quote volume).
+        Returns base symbols like ['BTC', 'ETH', ...]."""
+        data = self._request("GET", "/api/v3/ticker/24hr")    # all symbols
+        rows = data if isinstance(data, list) else []
+        usdt = [r for r in rows if str(r.get("symbol", "")).endswith("USDT")]
+        usdt.sort(key=lambda r: float(r.get("quoteVolume", 0) or 0), reverse=True)
+        syms = [r["symbol"][:-4] for r in usdt]               # strip "USDT"
+        return syms[:top] if top else syms
+
     def get_account(self):
         """Your balances. A signed READ -- proves your keys work. Trades nothing."""
         return self._request("GET", "/api/v3/account", signed=True)
