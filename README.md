@@ -17,15 +17,19 @@ behaves over time **without risking a single real cent**.
 
 ## What's inside
 
-| File            | What it does                                                        |
-|-----------------|---------------------------------------------------------------------|
-| `config.py`     | All the settings (coin, fake cash, risk rules, strategy). Start here.|
-| `data.py`       | Downloads real daily prices (tries several free sources).           |
-| `strategy.py`   | The "brain": decides BUY / SELL / HOLD.                             |
-| `portfolio.py`  | Tracks the fake money; remembers it between runs.                    |
-| `bot.py`        | **Run this once a day.** Makes one decision and updates your money.  |
-| `backtest.py`   | Replays the strategy over months of history to judge it.            |
-| `tests/`        | Quick self-tests that prove the logic works (no internet needed).   |
+| File               | What it does                                                       |
+|--------------------|-------------------------------------------------------------------|
+| `config.py`        | All the settings (coin, fake cash, risk rules, strategy). Start here.|
+| `data.py`          | Downloads real daily prices (tries several free sources).         |
+| `strategy.py`      | The "brain": three selectable strategies (sma / rsi / breakout).  |
+| `portfolio.py`     | Tracks the fake money; remembers it between runs.                  |
+| `bot.py`           | **Run this once a day.** Makes one decision and updates your money.|
+| `dashboard.py`     | A one-screen status report (read-only; never trades).             |
+| `backtest.py`      | Replays **all** strategies over history and compares them.        |
+| `run_daily.sh`     | Wrapper the scheduler calls; logs each run to `bot.log`.           |
+| `setup_schedule.sh`| One command to run the bot automatically every day (macOS/Linux). |
+| `SCHEDULING.md`    | How to automate the daily run (macOS/Linux **and** Windows).      |
+| `tests/`           | Quick self-tests that prove the logic works (no internet needed). |
 
 It uses **only Python's standard library** — nothing to install.
 
@@ -42,12 +46,30 @@ python3 bot.py --demo
 # 2. Judge the strategy over a long history:
 python3 backtest.py --demo
 
-# 3. When you have internet, use REAL market prices:
+# 3. See a full status snapshot any time (read-only):
+python3 dashboard.py --demo
+
+# 4. When you have internet, use REAL market prices:
 python3 bot.py
 
 # Start over any time:
 python3 bot.py --reset
 ```
+
+## Run it automatically every day
+
+Don't want to remember to run it? Schedule it (full guide in `SCHEDULING.md`):
+
+```bash
+# macOS / Linux — run daily at 09:00:
+./setup_schedule.sh
+# ...or pick a time, e.g. 6:30pm:
+./setup_schedule.sh 18 30
+# stop it later:
+./setup_schedule.sh --remove
+```
+
+Each automated run is appended to `bot.log`. Windows users: see `SCHEDULING.md`.
 
 ## The daily routine
 
@@ -63,22 +85,28 @@ Run `python3 bot.py` once a day. Each run it:
 > Scheduler (Windows) — but run it by hand for a few weeks first so you
 > understand what it's doing.
 
-## The strategy (in plain English)
+## The strategies (in plain English)
 
-It uses a **moving-average crossover** — one of the oldest, simplest ideas:
+Pick one with `STRATEGY` in `config.py`, then compare them with `backtest.py`:
 
-- Track a **fast** average (last 10 days) and a **slow** average (last 30 days).
-- Fast crosses **above** slow → prices trending up → **BUY**.
-- Fast crosses **below** slow → prices trending down → **SELL**.
+- **`sma`** — *moving-average crossover.* Track a fast average (10 days) and a
+  slow one (30 days). Fast crossing **above** slow → uptrend → **BUY**; crossing
+  **below** → downtrend → **SELL**. Rides trends.
+- **`rsi`** — *mean-reversion.* RSI is a 0–100 "how overheated is the price"
+  gauge. Buy when it's **oversold** (≤30), sell when **overbought** (≥70).
+  Bargain-hunting.
+- **`breakout`** — *Donchian breakout.* Buy when price sets a new 20-day **high**,
+  sell when it sets a new 20-day **low**. Chases momentum.
 
-Plus two safety rules whenever it holds coins:
+Whichever you choose, two safety rules apply whenever it holds coins:
 
 - **Stop-loss:** sell if down 5% (cut losses early).
 - **Take-profit:** sell if up 10% (lock in gains).
 
-Every number above lives in `config.py` — change them and re-run the backtest
-to see the effect. **This strategy will not always win.** The demo backtest
-even shows it losing to simple buy-and-hold sometimes. That's normal and honest.
+Every number lives in `config.py` — change them and re-run the backtest to see
+the effect. **No strategy always wins.** The demo backtest even shows all three
+losing to simple buy-and-hold over one stretch. That's normal and honest — which
+strategy wins depends entirely on the time period.
 
 ## Making it your own
 

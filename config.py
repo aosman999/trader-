@@ -46,17 +46,39 @@ STOP_LOSS_PCT = 0.05
 TAKE_PROFIT_PCT = 0.10
 
 # ---------------------------------------------------------------------------
-# THE STRATEGY  (a classic, simple "moving-average crossover")
+# WHICH STRATEGY TO USE
 # ---------------------------------------------------------------------------
-# A moving average is just the average price over the last N days. We track a
-# FAST one (reacts quickly) and a SLOW one (reacts slowly).
-#   - Fast crosses ABOVE slow  -> recent prices are climbing -> BUY signal.
-#   - Fast crosses BELOW slow  -> recent prices are falling  -> SELL signal.
-# This is one of the oldest, most understandable strategies. It is NOT magic
-# and will NOT always make money -- no strategy does. It's a sane starting point.
+# The bot ships with three classic, easy-to-understand strategies. Pick one
+# here. Use backtest.py to compare how all three would have performed before
+# committing to one. None of them is magic; none wins every time.
+#
+#   "sma"      Moving-average crossover. Rides trends: buys when prices start
+#              climbing, sells when they start falling. (Good all-rounder.)
+#   "rsi"      RSI mean-reversion. Buys when the coin looks "oversold" (beaten
+#              down) and sells when it looks "overbought." (Bargain hunting.)
+#   "breakout" Donchian breakout. Buys when price punches above its recent
+#              high, sells when it drops below its recent low. (Momentum.)
+STRATEGY = "sma"
 
+# --- settings for the "sma" strategy ---
+# A moving average is the average price over the last N days. We track a FAST
+# one (reacts quickly) and a SLOW one (reacts slowly). Fast crossing above slow
+# is a BUY; crossing below is a SELL.
 SMA_FAST = 10   # fast moving average, in days
 SMA_SLOW = 30   # slow moving average, in days
+
+# --- settings for the "rsi" strategy ---
+# RSI is a 0-100 gauge of how hard a price has recently risen vs fallen.
+# Below ~30 = "oversold" (possible bargain -> buy). Above ~70 = "overbought"
+# (possibly overheated -> sell).
+RSI_PERIOD = 14
+RSI_BUY = 30    # buy when RSI dips below this
+RSI_SELL = 70   # sell when RSI rises above this
+
+# --- settings for the "breakout" strategy ---
+# Look back this many days. Buy if today's price is the highest in that window;
+# sell if it's the lowest.
+DONCHIAN_DAYS = 20
 
 # How many days of price history to download each run. Needs to be comfortably
 # larger than SMA_SLOW so the averages have enough data.

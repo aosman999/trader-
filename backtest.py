@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-backtest.py  --  fast-forward the strategy over a whole price history.
-=====================================================================
+backtest.py  --  fast-forward the strategies over a whole price history.
+=======================================================================
 
 bot.py makes ONE decision per run (realistic, one day at a time). A backtest
-instead replays the strategy across ALL the historical days at once, so you can
-see in seconds how it WOULD have done over months -- including how it compares
-to simply buying and holding the coin.
+instead replays a strategy across ALL the historical days at once, so you can
+see in seconds how it WOULD have done -- and compare every strategy against
+simply buying and holding the coin.
 
 This is the honest way to judge a strategy BEFORE trusting it. Remember: good
 past performance does NOT guarantee future results. Markets change.
 
-    python3 backtest.py            # backtest on real historical prices
-    python3 backtest.py --demo     # backtest on offline practice prices
+    python3 backtest.py            # compare all strategies on real prices
+    python3 backtest.py --demo     # compare all strategies on offline prices
 """
 
 import sys
@@ -23,19 +23,20 @@ import portfolio
 import strategy
 
 
-def run_backtest(prices):
-    # A self-contained fake portfolio just for the simulation.
+def run_backtest(prices, strategy_name):
+    """Replay one named strategy over the price history. Returns
+    (final_value, trades_made, winning_sells)."""
     state = {"cash": config.STARTING_CASH, "coins": 0.0, "entry_price": 0.0}
     trades = 0
     wins = 0
 
-    # Walk forward day by day. We start once there's enough history for the
-    # slow moving average to exist.
-    for day in range(config.SMA_SLOW + 1, len(prices)):
-        window = prices[:day + 1]          # prices known "as of" this day
+    # Walk forward day by day, only using prices known "as of" that day.
+    for day in range(2, len(prices)):
+        window = prices[:day + 1]
         price = window[-1]
         holding = state["coins"] > 0
-        action, _ = strategy.decide(window, holding, state["entry_price"])
+        action, _ = strategy.decide(window, holding, state["entry_price"],
+                                    strategy_name=strategy_name)
 
         if action == "BUY" and not holding:
             spend = state["cash"] * config.TRADE_FRACTION
@@ -50,11 +51,11 @@ def run_backtest(prices):
             proceeds = state["coins"] * price
             state["cash"] += proceeds - proceeds * config.FEE_PCT
             state["coins"] = 0.0
+            state["entry_price"] = 0.0
             if price > entry:
                 wins += 1
 
-    final = portfolio.total_value(state, prices[-1])
-    return final, trades, wins
+    return portfolio.total_value(state, prices[-1]), trades, wins
 
 
 def main():
@@ -69,23 +70,34 @@ def main():
             return
 
     start = config.STARTING_CASH
-    final, trades, wins = run_backtest(prices)
-
-    # Benchmark: what if you had just bought on day one and held? This is the
-    # bar any strategy must beat to be worth the effort.
-    buy_hold = start * (prices[-1] / prices[0])
+    buy_hold = start * (prices[-1] / prices[0])  # the bar to beat
 
     print(f"\n=== Backtest | {config.SYMBOL} | "
           f"{'DEMO' if use_demo else 'LIVE'} | {len(prices)} days ===")
-    print(f"  Starting cash      : ${start:,.2f}")
-    print(f"  Strategy final     : ${final:,.2f} "
-          f"({(final / start - 1) * 100:+.1f}%)")
-    print(f"  Buy-and-hold final : ${buy_hold:,.2f} "
-          f"({(buy_hold / start - 1) * 100:+.1f}%)")
-    print(f"  Trades made        : {trades} (winning sells: {wins})")
-    verdict = ("strategy beat buy-and-hold" if final > buy_hold
-               else "buy-and-hold was better here")
-    print(f"  Verdict            : {verdict}\n")
+    print(f"  Starting cash: ${start:,.2f}\n")
+    print(f"  {'strategy':<12} {'final $':>12} {'return':>9} "
+          f"{'trades':>7} {'wins':>5}")
+    print(f"  {'-' * 12} {'-' * 12:>12} {'-' * 9:>9} {'-' * 7:>7} {'-' * 5:>5}")
+
+    results = {}
+    for name in strategy.STRATEGIES:
+        final, trades, wins = run_backtest(prices, name)
+        results[name] = final
+        ret = (final / start - 1) * 100
+        star = "  <- current" if name == config.STRATEGY else ""
+        print(f"  {name:<12} {final:>12,.2f} {ret:>+8.1f}% "
+              f"{trades:>7} {wins:>5}{star}")
+
+    bh_ret = (buy_hold / start - 1) * 100
+    print(f"  {'buy & hold':<12} {buy_hold:>12,.2f} {bh_ret:>+8.1f}% "
+          f"{1:>7} {'-':>5}")
+
+    best = max(list(results.items()) + [("buy & hold", buy_hold)],
+              key=lambda kv: kv[1])
+    print(f"\n  Best over this period: {best[0]} (${best[1]:,.2f})")
+    print("  Note: the winner changes with the time period. Backtest several\n"
+          "  periods before trusting any strategy -- and never risk money you\n"
+          "  can't afford to lose.\n")
 
 
 if __name__ == "__main__":

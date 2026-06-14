@@ -44,12 +44,13 @@ class TestStrategy(unittest.TestCase):
 
 
 class TestBacktest(unittest.TestCase):
-    def test_backtest_runs_and_keeps_money_sane(self):
+    def test_every_strategy_runs_and_keeps_money_sane(self):
         prices = data.demo_closes(config.HISTORY_DAYS, seed=42)
-        final, trades, wins = backtest.run_backtest(prices)
-        self.assertGreater(final, 0)          # never goes negative
-        self.assertGreaterEqual(trades, 0)
-        self.assertLessEqual(wins, trades)
+        for name in strategy.STRATEGIES:
+            final, trades, wins = backtest.run_backtest(prices, name)
+            self.assertGreater(final, 0, name)        # never goes negative
+            self.assertGreaterEqual(trades, 0, name)
+            self.assertLessEqual(wins, trades, name)
 
 
 if __name__ == "__main__":
