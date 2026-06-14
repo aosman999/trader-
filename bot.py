@@ -34,7 +34,53 @@ import strategy
 
 HEARTBEAT_FILE = "last_heartbeat.json"   # remembers when we last sent a status
 LAST_TRADE_FILE = "last_trade.json"      # date of the last trade (for max-idle)
+LAST_SIGNAL_FILE = "last_signal.json"    # last futures signal sent (dedupe)
 SHOW_TOP_SETUPS = 12                      # how many candidate setups to detail
+SIGNAL_COOLDOWN_MIN = 60                  # don't re-text the same signal within this
+
+
+def _fmt_price(p):
+    """Format a price compactly across very different scales (BTC vs DOGE)."""
+    if p >= 100:
+        return f"{p:,.2f}"
+    if p >= 1:
+        return f"{p:,.4f}"
+    return f"{p:.6f}"
+
+
+def _send_futures_signal(symbol, entry):
+    """Text the user a futures trade to place BY HAND (MEXC blocks futures API).
+    Deduped so the same signal isn't re-sent every minute."""
+    if not config.FUTURES_SIGNALS:
+        return
+    last_sym, last_ts = None, 0.0
+    if os.path.exists(LAST_SIGNAL_FILE):
+        try:
+            with open(LAST_SIGNAL_FILE) as f:
+                d = json.load(f)
+            last_sym, last_ts = d.get("symbol"), d.get("ts", 0.0)
+        except Exception:  # noqa: BLE001
+            pass
+    if symbol == last_sym and time.time() - last_ts < SIGNAL_COOLDOWN_MIN * 60:
+        return  # already texted this one recently
+
+    lev = config.LEVERAGE
+    sl = entry * (1 - config.STOP_LOSS_PCT)
+    tp = entry * (1 + config.SIGNAL_TP_PCT)
+    msg = (f"FUTURES SIGNAL -- place this by hand:\n"
+           f"Coin: {symbol}\n"
+           f"Direction: LONG\n"
+           f"Leverage: {lev}x (isolated)\n"
+           f"Entry: ~${_fmt_price(entry)}\n"
+           f"Take-profit: ${_fmt_price(tp)} (+{config.SIGNAL_TP_PCT * 100:.0f}%)\n"
+           f"Stop-loss: ${_fmt_price(sl)} (-{config.STOP_LOSS_PCT * 100:.0f}%)\n"
+           f"Risk only a small part of your futures balance.")
+    notify.send(msg, title=f"Futures signal: LONG {symbol}")
+    with open(LAST_SIGNAL_FILE, "w") as f:
+        json.dump({"symbol": symbol, "ts": time.time()}, f)
+    print(f"  Futures SIGNAL texted: LONG {symbol} @ ${_fmt_price(entry)} "
+          f"({lev}x, TP +{config.SIGNAL_TP_PCT * 100:.0f}%, "
+          f"SL -{config.STOP_LOSS_PCT * 100:.0f}%)")
 
 
 def _today():
@@ -155,25 +201,21 @@ def _manage_open_position(broker, pos):
             f"peak ${high_water:,.4f})"), False
 
 
-def _scan_and_maybe_enter(broker):
-    """We're in cash: scan the watchlist and enter the best qualifying coin.
-    Returns (status_text, a_trade_happened)."""
-    cash = broker.cash()
-    print(f"\n  In cash  : ${cash:,.2f}")
-    if cash <= config.FLOOR_USD:
-        print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
-        return f"At floor ${cash:,.2f}; not trading", False
-
+def _scan_setups(broker):
+    """Scan the whole universe and PRINT every forming setup. Returns
+    (best, buy_cands) where best = (symbol, price, reason) of the strongest
+    multi-timeframe-confirmed setup, or None. Runs regardless of whether spot is
+    holding -- so futures signals keep coming even while a spot trade is open."""
     try:
         universe = broker.universe()
     except Exception as exc:  # noqa: BLE001
         print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
-        return f"In cash ${cash:,.2f}; coin-list error", False
+        return None, []
 
     src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
 
-    # Pass 1: find every coin forming a BUY setup, ranked by strength.
+    # Pass 1: every coin forming a BUY setup, ranked by strength.
     buy_cands = []   # (score, symbol, price)
     for symbol in universe:
         try:
@@ -185,8 +227,8 @@ def _scan_and_maybe_enter(broker):
             buy_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
     buy_cands.sort(reverse=True)
 
-    # Pass 2: SHOW each setup (strength + how many timeframes agree), and pick
-    # the strongest one that passes multi-timeframe confirmation.
+    # Pass 2: SHOW each setup (strength + timeframe agreement), pick the strongest
+    # one that passes multi-timeframe confirmation.
     best = None       # (symbol, price, reason)
     shown = buy_cands[:SHOW_TOP_SETUPS]
     if not buy_cands:
@@ -201,6 +243,17 @@ def _scan_and_maybe_enter(broker):
               f"trend {agree}/{checked} timeframes   [{tag}]")
         if confirmed and best is None:
             best = (symbol, price, "multi-timeframe confirmed uptrend")
+    return best, buy_cands
+
+
+def _maybe_enter_spot(broker, best, buy_cands):
+    """Spot side: with the scan's result, open the best setup (auto). Returns
+    (status_text, a_trade_happened)."""
+    cash = broker.cash()
+    print(f"  In cash  : ${cash:,.2f}")
+    if cash <= config.FLOOR_USD:
+        print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
+        return f"At floor ${cash:,.2f}; not trading", False
 
     # Last resort: don't sit idle past MAX_IDLE_DAYS -- take the best raw setup.
     if best is None and buy_cands and _should_force_trade():
@@ -217,7 +270,7 @@ def _scan_and_maybe_enter(broker):
                 f"{idle}"), False
 
     symbol, price, reason = best
-    print(f"\n  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
+    print(f"  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
     try:
         msg = broker.open(symbol, price)
     except Exception as exc:  # noqa: BLE001 - a failed order must not crash the run
@@ -261,10 +314,19 @@ def main():
         print(f"\nCould not reach the account:\n  {exc}")
         return
 
+    # Always scan for setups -- this drives BOTH the spot auto-trade and the
+    # (optional) futures signal, and runs even while a spot trade is open.
+    best, buy_cands = _scan_setups(broker)
+
+    # Futures signal: text the best setup to place by hand (never auto-traded).
+    if config.FUTURES_SIGNALS and best:
+        _send_futures_signal(best[0], best[1])
+
+    # Spot side: manage an open position, or enter the best setup.
     if pos:
         status, traded = _manage_open_position(broker, pos)
     else:
-        status, traded = _scan_and_maybe_enter(broker)
+        status, traded = _maybe_enter_spot(broker, best, buy_cands)
 
     print(f"  Cash available: ${broker.cash():,.2f}\n")
 

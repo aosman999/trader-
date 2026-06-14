@@ -117,6 +117,16 @@ MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 # generous. export MAX_IDLE_DAYS="3"
 MAX_IDLE_DAYS = _i("MAX_IDLE_DAYS", "0")
 
+# FUTURES SIGNALS (manual). MEXC blocks placing futures orders via API, but you
+# can trade futures by hand. If "true", whenever the bot finds a confirmed setup
+# it TEXTS you the trade to place yourself (coin, LONG, entry, leverage, take-
+# profit, stop-loss). Spot still auto-trades on its own. export FUTURES_SIGNALS="true"
+FUTURES_SIGNALS = _s("FUTURES_SIGNALS", "false").strip().lower() in (
+    "true", "1", "yes", "on")
+# Fixed take-profit % shown in the texted signal (a manual trade can't trail).
+# export SIGNAL_TP_PCT="0.16"
+SIGNAL_TP_PCT = _f("SIGNAL_TP_PCT", "0.16")
+
 # ---------------------------------------------------------------------------
 # NOTIFICATIONS
 # ---------------------------------------------------------------------------

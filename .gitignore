@@ -15,3 +15,4 @@ mexc_spot_state.json
 mexc_hwm.json
 last_heartbeat.json
 last_trade.json
+last_signal.json
