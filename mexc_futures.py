@@ -156,6 +156,17 @@ class MexcFuturesClient:
                 return float(asset.get("availableBalance", 0))
         return 0.0
 
+    def usdt_equity(self):
+        """TOTAL USDT in the futures wallet (cash + margin + unrealized P/L) --
+        what the whole futures account is currently worth."""
+        data = self._request("GET", "/api/v1/private/account/assets",
+                             signed=True)
+        for asset in data.get("data", []):
+            if asset.get("currency") == "USDT":
+                return float(asset.get("equity")
+                             or asset.get("availableBalance", 0) or 0)
+        return 0.0
+
     def long_position(self, symbol):
         """Return (contracts_held, average_entry_price) for an open LONG, or
         (0, 0.0) if none."""

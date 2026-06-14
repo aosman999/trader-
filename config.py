@@ -143,6 +143,12 @@ NOTIFY_STATUS_MINUTES = _i("NOTIFY_STATUS_MINUTES", "15")
 TARGET_USD = _f("TARGET_USD", "0")
 TARGET_STOP = _s("TARGET_STOP", "false").strip().lower() in ("true", "1", "yes", "on")
 
+# Optional DEADLINE for the goal, in days. This is PURELY a progress tracker --
+# it reports how you're pacing toward the target and how many days are left. It
+# does NOT and CANNOT make returns arrive faster; forcing a deadline would only
+# make the bot take reckless trades and lose money. export TARGET_DAYS="21"
+TARGET_DAYS = _i("TARGET_DAYS", "0")
+
 # ---------------------------------------------------------------------------
 # REALISM / FILES
 # ---------------------------------------------------------------------------

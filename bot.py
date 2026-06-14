@@ -36,8 +36,43 @@ HEARTBEAT_FILE = "last_heartbeat.json"   # remembers when we last sent a status
 LAST_TRADE_FILE = "last_trade.json"      # date of the last trade (for max-idle)
 LAST_SIGNAL_FILE = "last_signal.json"    # last futures signal sent (dedupe)
 GOAL_FILE = "goal_reached.json"          # marks that we've alerted on the goal
+TARGET_START_FILE = "target_start.json"  # date the deadline clock started
 SHOW_TOP_SETUPS = 12                      # how many candidate setups to detail
 SIGNAL_COOLDOWN_MIN = 60                  # don't re-text the same signal within this
+
+
+def _futures_equity():
+    """Total value of the futures wallet in USDT (read-only -- futures *trading*
+    via API is blocked, but reading the balance works). 0 on any failure."""
+    try:
+        import mexc_futures
+        return mexc_futures.MexcFuturesClient().usdt_equity()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _goal_progress(total):
+    """Short, informational progress string toward TARGET_USD (across the whole
+    account), including the optional deadline. Tracks only -- forces nothing."""
+    if config.TARGET_USD <= 0:
+        return ""
+    pct = total / config.TARGET_USD * 100
+    s = f"Goal ${config.TARGET_USD:,.0f}: at ${total:,.2f} ({pct:.1f}%)"
+    if config.TARGET_DAYS > 0:
+        start = None
+        if os.path.exists(TARGET_START_FILE):
+            try:
+                with open(TARGET_START_FILE) as f:
+                    start = datetime.strptime(json.load(f)["date"], "%Y-%m-%d").date()
+            except Exception:  # noqa: BLE001
+                start = None
+        if start is None:
+            start = datetime.now().date()
+            with open(TARGET_START_FILE, "w") as f:
+                json.dump({"date": start.strftime("%Y-%m-%d")}, f)
+        left = max(0, config.TARGET_DAYS - (datetime.now().date() - start).days)
+        s += f", {left} of {config.TARGET_DAYS} days left"
+    return s
 
 
 def _goal_milestone(cash):
@@ -314,13 +349,19 @@ def _scan_setups(broker):
 def _maybe_enter_spot(broker, best, buy_cands):
     """Spot side: with the scan's result, open the best setup (auto). Returns
     (status_text, a_trade_happened)."""
-    cash = broker.cash()
-    print(f"  In cash  : ${cash:,.2f}")
-    if _goal_milestone(cash):
-        return f"Goal reached ${cash:,.2f}; banked, not trading", False
+    cash = broker.cash()                       # spare spot USDT (drives sizing)
+    fut = _futures_equity()                     # whole futures wallet (read-only)
+    total = cash + fut                          # goal is the WHOLE account
+    print(f"  In cash  : ${cash:,.2f} spot  + ${fut:,.2f} futures = "
+          f"${total:,.2f} total")
+    if config.TARGET_USD > 0:
+        print(f"  {_goal_progress(total)}")
+    # Goal is judged on the TOTAL account (spot + futures).
+    if _goal_milestone(total):
+        return f"Goal reached ${total:,.2f}; banked, not trading", False
     if cash <= config.FLOOR_USD:
         print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
-        return f"At floor ${cash:,.2f}; not trading", False
+        return f"At floor ${cash:,.2f} spot; not trading", False
 
     # Last resort: don't sit idle past MAX_IDLE_DAYS -- take the best raw setup.
     if best is None and buy_cands and _should_force_trade():
