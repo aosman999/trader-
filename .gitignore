@@ -1,0 +1,9 @@
+# Runtime files the bot creates — these are personal state, not source code.
+portfolio.json
+trades.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
