@@ -307,10 +307,16 @@ def _scan_setups(broker):
             if config.USE_SR and not strategy.has_room(prices, "long",
                                                        config.SR_MIN_ROOM):
                 continue
+            # Buy/sell power: a long needs buyers in control.
+            if config.USE_BUY_POWER and broker.buy_power(symbol) < config.BUY_POWER_MIN:
+                continue
             long_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
         elif config.FUTURES_SIGNALS and strategy.short_signal(prices):
             if config.USE_SR and not strategy.has_room(prices, "short",
                                                        config.SR_MIN_ROOM):
+                continue
+            # Buy/sell power: a short needs sellers in control.
+            if config.USE_BUY_POWER and broker.buy_power(symbol) > (1 - config.BUY_POWER_MIN):
                 continue
             # short strength: how far the fast average sits BELOW the slow.
             short_cands.append((-strategy.momentum_score(prices), symbol, prices[-1]))

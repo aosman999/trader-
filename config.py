@@ -116,6 +116,14 @@ MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 USE_SR = _s("USE_SR", "false").strip().lower() in ("true", "1", "yes", "on")
 SR_MIN_ROOM = _f("SR_MIN_ROOM", "0.03")
 
+# BUY/SELL POWER filter. When "true", measures buying vs selling pressure from
+# recent volume (volume on up-candles / total). A LONG needs buyers in control
+# (>= BUY_POWER_MIN); a SHORT needs sellers in control (<= 1 - BUY_POWER_MIN).
+# export USE_BUY_POWER="true"
+USE_BUY_POWER = _s("USE_BUY_POWER", "false").strip().lower() in (
+    "true", "1", "yes", "on")
+BUY_POWER_MIN = _f("BUY_POWER_MIN", "0.55")   # 0.55 = 55% of volume buying
+
 # DON'T SIT IDLE TOO LONG. If MAX_IDLE_DAYS > 0 and no trade has happened in that
 # many days, the bot takes the BEST available candidate even without full
 # multi-timeframe confirmation -- so it never goes longer than this without

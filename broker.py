@@ -73,6 +73,9 @@ class PaperBroker:
         return data.get_closes(symbol, interval or config.INTERVAL,
                                config.HISTORY_DAYS)
 
+    def buy_power(self, symbol):
+        return 0.5   # paper/demo has no volume data -> neutral (passes filter)
+
     def cash(self):
         return self.state["cash"]
 
@@ -128,6 +131,9 @@ class MexcBroker:
 
     def cash(self):
         return self.client.get_free_balance("USDT")
+
+    def buy_power(self, symbol):
+        return self.client.buy_power(symbol + "USDT", config.INTERVAL, 50)
 
     def _load(self):
         if os.path.exists(self.STATE_FILE):
@@ -230,6 +236,9 @@ class MexcFuturesBroker:
 
     def cash(self):
         return self.client.usdt_balance()
+
+    def buy_power(self, symbol):
+        return self.client.buy_power(self._pair(symbol), config.INTERVAL, 50)
 
     def current_position(self):
         pair, vol, entry = self.client.any_long_position()

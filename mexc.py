@@ -113,6 +113,21 @@ class MexcClient:
         syms = [r["symbol"][:-4] for r in usdt]               # strip "USDT"
         return syms[:top] if top else syms
 
+    def buy_power(self, symbol, interval, limit):
+        """Buying vs selling pressure over recent candles: volume on up-candles
+        divided by total volume (0-1). >0.5 = buyers in control. Public."""
+        rows = self._request("GET", "/api/v3/klines",
+                            {"symbol": symbol,
+                             "interval": self._INTERVALS[interval],
+                             "limit": limit})
+        up = tot = 0.0
+        for r in rows:
+            o, c, v = float(r[1]), float(r[4]), float(r[5])  # open, close, volume
+            tot += v
+            if c >= o:
+                up += v
+        return up / tot if tot > 0 else 0.5
+
     def get_account(self):
         """Your balances. A signed READ -- proves your keys work. Trades nothing."""
         return self._request("GET", "/api/v3/account", signed=True)

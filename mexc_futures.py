@@ -128,6 +128,21 @@ class MexcFuturesClient:
         closes = [float(c) for c in data["data"]["close"]]
         return closes[-limit:]
 
+    def buy_power(self, symbol, interval, limit):
+        """Buying vs selling pressure from recent candle volume (0-1)."""
+        data = self._request("GET", f"/api/v1/contract/kline/{symbol}",
+                             {"interval": self._INTERVALS[interval]})
+        d = data["data"]
+        opens, closes, vols = (d["open"][-limit:], d["close"][-limit:],
+                               d["vol"][-limit:])
+        up = tot = 0.0
+        for o, c, v in zip(opens, closes, vols):
+            v = float(v)
+            tot += v
+            if float(c) >= float(o):
+                up += v
+        return up / tot if tot > 0 else 0.5
+
     def contract_size(self, symbol):
         """How much of the coin one contract represents (e.g. 0.0001 BTC)."""
         data = self._request("GET", "/api/v1/contract/detail",
