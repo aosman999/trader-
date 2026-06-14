@@ -64,7 +64,8 @@ def main():
         prices = data.demo_closes(config.HISTORY_DAYS, seed=42)
     else:
         try:
-            prices = data.get_daily_closes(config.SYMBOL, config.HISTORY_DAYS)
+            prices = data.get_closes(config.SYMBOL, config.INTERVAL,
+                                     config.HISTORY_DAYS)
         except Exception as exc:  # noqa: BLE001
             print(f"Could not get prices: {exc}")
             return

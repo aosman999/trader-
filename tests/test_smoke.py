@@ -18,6 +18,7 @@ import config       # noqa: E402
 import data         # noqa: E402
 import strategy     # noqa: E402
 import backtest     # noqa: E402
+import portfolio    # noqa: E402
 
 
 class TestData(unittest.TestCase):
@@ -51,6 +52,26 @@ class TestBacktest(unittest.TestCase):
             self.assertGreater(final, 0, name)        # never goes negative
             self.assertGreaterEqual(trades, 0, name)
             self.assertLessEqual(wins, trades, name)
+
+
+class TestFloor(unittest.TestCase):
+    def test_buy_never_risks_below_floor(self):
+        # Equity 20, floor 12 -> at most 8 may be spent (not 50% = 10).
+        state = {"cash": 20.0, "coins": 0.0, "entry_price": 0.0}
+        portfolio.buy(state, 30000.0)
+        spent = 20.0 - state["cash"]
+        self.assertLessEqual(spent, 20.0 - config.FLOOR_USD + 1e-6)
+
+    def test_no_buy_when_at_floor(self):
+        state = {"cash": config.FLOOR_USD, "coins": 0.0, "entry_price": 0.0}
+        self.assertIsNone(portfolio.buy(state, 30000.0))
+
+
+class TestRiskRatio(unittest.TestCase):
+    def test_take_profit_is_four_times_stop(self):
+        # The 4:1 plan must hold.
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT,
+                               4 * config.STOP_LOSS_PCT, places=6)
 
 
 if __name__ == "__main__":

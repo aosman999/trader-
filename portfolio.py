@@ -54,10 +54,13 @@ def total_value(state, price_now):
 
 
 def buy(state, price):
-    """Spend a fraction of cash (per config.TRADE_FRACTION) to buy the coin.
+    """Spend a fraction of cash (per config.TRADE_FRACTION) to buy the coin,
+    but never risk money below the capital floor.
     Returns a human-readable message, or None if nothing happened."""
-    spend = state["cash"] * config.TRADE_FRACTION
-    if spend < 1:  # not enough cash to bother
+    equity = total_value(state, price)
+    risk_budget = max(0.0, equity - config.FLOOR_USD)   # protect the floor
+    spend = min(state["cash"] * config.TRADE_FRACTION, risk_budget)
+    if spend < 1:  # not enough cash to bother, or floor reached
         return None
     fee = spend * config.FEE_PCT
     coins_bought = (spend - fee) / price

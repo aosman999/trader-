@@ -58,8 +58,20 @@ def main():
         print(f"\nCould not get prices / connect:\n  {exc}")
         return
     price_now = prices[-1]
-
     holding = broker.holding(price_now)
+
+    # CIRCUIT BREAKER: protect the capital floor. If we've fallen to it, close any
+    # open position and stop trading -- no new risk until you intervene.
+    total_now = broker.total_value(price_now)
+    if total_now <= config.FLOOR_USD:
+        print(f"\n  ** FLOOR REACHED ** equity ${total_now:,.2f} <= "
+              f"${config.FLOOR_USD:,.2f}")
+        if holding:
+            print(f"  Closing position to protect the floor: "
+                  f"{broker.sell(price_now)}")
+        print("  Trading halted. Review before resuming "
+              "(raise FLOOR_USD or add funds).\n")
+        return
 
     # 3. Decide.
     action, reason = strategy.decide(prices, holding, broker.entry_price())

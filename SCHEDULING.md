@@ -18,7 +18,15 @@ chmod +x run_daily.sh setup_schedule.sh
 ./setup_schedule.sh            # runs daily at 09:00
 # or choose a time, e.g. 6:30pm:
 ./setup_schedule.sh 18 30
+# or, to allow several trades per day, run every hour
+# (match this with INTERVAL = "1h" in config.py):
+./setup_schedule.sh hourly
 ```
+
+> **Match the schedule to `config.INTERVAL`.** If `INTERVAL = "1h"`, schedule
+> `hourly` so the bot checks each new hourly candle — that's what lets it take
+> 0 trades on a quiet day and several on an active one. If `INTERVAL = "1d"`,
+> a once-a-day schedule is right.
 
 Check it's scheduled:
 

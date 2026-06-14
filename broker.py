@@ -52,7 +52,7 @@ class PaperBroker:
     def history(self):
         if self.use_demo:
             return data.demo_closes(config.HISTORY_DAYS, seed=42)
-        return data.get_daily_closes(config.SYMBOL, config.HISTORY_DAYS)
+        return data.get_closes(config.SYMBOL, config.INTERVAL, config.HISTORY_DAYS)
 
     def cash(self):
         return self.state["cash"]
@@ -94,7 +94,8 @@ class MexcBroker:
         self.base = config.SYMBOL            # e.g. BTC
 
     def history(self):
-        return self.client.get_daily_closes(self.pair, config.HISTORY_DAYS)
+        return self.client.get_closes(self.pair, config.INTERVAL,
+                                      config.HISTORY_DAYS)
 
     def cash(self):
         return self.client.get_free_balance("USDT")
@@ -119,7 +120,9 @@ class MexcBroker:
             json.dump({"entry_price": price}, f)
 
     def buy(self, price):
-        usd = self.cash() * config.TRADE_FRACTION
+        equity = self.total_value(price)
+        risk_budget = max(0.0, equity - config.FLOOR_USD)   # protect the floor
+        usd = min(self.cash() * config.TRADE_FRACTION, risk_budget)
         if usd < 1:
             return None
         result = self.client.market_buy(self.pair, usd)
@@ -157,7 +160,8 @@ class MexcFuturesBroker:
         self._size = None
 
     def history(self):
-        return self.client.get_daily_closes(self.pair, config.HISTORY_DAYS)
+        return self.client.get_closes(self.pair, config.INTERVAL,
+                                      config.HISTORY_DAYS)
 
     def _contract_size(self):
         if self._size is None:
@@ -183,7 +187,11 @@ class MexcFuturesBroker:
         return avg
 
     def buy(self, price):
-        margin = self.cash() * config.TRADE_FRACTION
+        equity = self.cash()
+        risk_budget = max(0.0, equity - config.FLOOR_USD)   # protect the floor
+        # Isolated margin: the most a trade can lose is its margin. Keeping margin
+        # at or below (equity - FLOOR) means even a full liquidation leaves ~FLOOR.
+        margin = min(equity * config.TRADE_FRACTION, risk_budget)
         if margin < 1:
             return None
         notional = margin * self.client.leverage

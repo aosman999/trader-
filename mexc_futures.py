@@ -113,12 +113,15 @@ class MexcFuturesClient:
                              {"symbol": symbol})
         return float(data["data"]["lastPrice"])
 
-    def get_daily_closes(self, symbol, days):
-        """Daily closing prices (oldest first) for the strategy to read."""
+    # How MEXC futures spells the timeframes we support.
+    _INTERVALS = {"1h": "Min60", "4h": "Hour4", "1d": "Day1"}
+
+    def get_closes(self, symbol, interval, limit):
+        """Closing prices (oldest first) for the strategy to read."""
         data = self._request("GET", f"/api/v1/contract/kline/{symbol}",
-                             {"interval": "Day1"})
+                             {"interval": self._INTERVALS[interval]})
         closes = [float(c) for c in data["data"]["close"]]
-        return closes[-days:]
+        return closes[-limit:]
 
     def contract_size(self, symbol):
         """How much of the coin one contract represents (e.g. 0.0001 BTC)."""

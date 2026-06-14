@@ -86,11 +86,16 @@ class MexcClient:
                              {"symbol": symbol})
         return float(data["price"])
 
-    def get_daily_closes(self, symbol, days):
-        """Daily closing prices (oldest first) straight from MEXC. Public.
+    # How MEXC spot spells the timeframes we support.
+    _INTERVALS = {"1h": "60m", "4h": "4h", "1d": "1d"}
+
+    def get_closes(self, symbol, interval, limit):
+        """Closing prices (oldest first) straight from MEXC. Public.
         Used so the strategy decides on MEXC's own prices."""
         rows = self._request("GET", "/api/v3/klines",
-                            {"symbol": symbol, "interval": "1d", "limit": days})
+                            {"symbol": symbol,
+                             "interval": self._INTERVALS[interval],
+                             "limit": limit})
         return [float(r[4]) for r in rows]   # index 4 = close
 
     # -- private (keys needed) -----------------------------------------------

@@ -8,7 +8,8 @@
 # Usage:
 #   ./setup_schedule.sh            # run daily at 09:00 (default)
 #   ./setup_schedule.sh 18 30      # run daily at 18:30
-#   ./setup_schedule.sh --remove   # stop the daily run
+#   ./setup_schedule.sh hourly     # run every hour (for INTERVAL="1h")
+#   ./setup_schedule.sh --remove   # stop the scheduled runs
 
 set -euo pipefail
 
@@ -25,16 +26,23 @@ if [ "${1:-}" = "--remove" ]; then
   exit 0
 fi
 
-HOUR="${1:-9}"
-MIN="${2:-0}"
-
 chmod +x "$RUNNER"
 
-# minute hour * * *  -> every day at HOUR:MIN
-new_line="$MIN $HOUR * * * $RUNNER $TAG"
+if [ "${1:-}" = "hourly" ]; then
+  # minute=0, every hour -> runs at the top of every hour, every day.
+  schedule="0 * * * *"
+  human="every hour, on the hour"
+else
+  HOUR="${1:-9}"
+  MIN="${2:-0}"
+  schedule="$MIN $HOUR * * *"          # every day at HOUR:MIN
+  human="$(printf 'every day at %02d:%02d' "$HOUR" "$MIN")"
+fi
+
+new_line="$schedule $RUNNER $TAG"
 printf '%s\n%s\n' "$current" "$new_line" | grep -v '^$' | crontab -
 
-printf "Scheduled: the bot will run every day at %02d:%02d.\n" "$HOUR" "$MIN"
+echo "Scheduled: the bot will run $human."
 echo "Output is appended to: $DIR/bot.log"
 echo "To stop it later:  ./setup_schedule.sh --remove"
 echo "To see the schedule:  crontab -l"

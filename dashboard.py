@@ -55,7 +55,8 @@ def main():
         prices = data.demo_closes(config.HISTORY_DAYS, seed=42)
     else:
         try:
-            prices = data.get_daily_closes(config.SYMBOL, config.HISTORY_DAYS)
+            prices = data.get_closes(config.SYMBOL, config.INTERVAL,
+                                     config.HISTORY_DAYS)
         except Exception as exc:  # noqa: BLE001
             print(f"Could not get prices: {exc}")
             return
@@ -100,7 +101,7 @@ def main():
             tag = "neutral"
         print(f"    RSI({config.RSI_PERIOD})     : {rsi_val:>12.0f}   ({tag})")
 
-    print(f"\n    Last ~7 weeks: {sparkline(prices)}")
+    print(f"\n    Recent ({config.INTERVAL}): {sparkline(prices)}")
     print(f"    range ${min(prices[-48:]):,.0f} "
           f"-> ${max(prices[-48:]):,.0f}")
 
