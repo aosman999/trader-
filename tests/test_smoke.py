@@ -43,6 +43,22 @@ class TestStrategy(unittest.TestCase):
         self.assertEqual(action, "SELL")
         self.assertIn("stop-loss", reason)
 
+    def test_trailing_stop_triggers(self):
+        # In profit (entry below price), but price fell well below the peak.
+        prices = data.demo_closes(config.HISTORY_DAYS, seed=2)
+        price = prices[-1]
+        peak = price * 1.20                         # peaked 20% above now
+        action, reason = strategy.decide(prices, holding=True,
+                                         entry_price=price * 0.99,
+                                         high_water=peak)
+        self.assertEqual(action, "SELL")
+        self.assertIn("trailing", reason)
+
+    def test_trend_up_helper(self):
+        rising = list(range(1, 100))                # steadily increasing
+        self.assertTrue(strategy.trend_up(rising))
+        self.assertFalse(strategy.trend_up(list(reversed(rising))))
+
 
 class TestBacktest(unittest.TestCase):
     def test_every_strategy_runs_and_keeps_money_sane(self):
@@ -68,13 +84,6 @@ class TestFloor(unittest.TestCase):
     def test_no_buy_when_at_floor(self):
         state = self._fresh(config.FLOOR_USD)
         self.assertIsNone(portfolio.buy(state, "BTC", 30000.0))
-
-
-class TestRiskRatio(unittest.TestCase):
-    def test_take_profit_is_four_times_stop(self):
-        # The 4:1 plan must hold.
-        self.assertAlmostEqual(config.TAKE_PROFIT_PCT,
-                               4 * config.STOP_LOSS_PCT, places=6)
 
 
 if __name__ == "__main__":

@@ -114,7 +114,8 @@ class MexcFuturesClient:
         return float(data["data"]["lastPrice"])
 
     # How MEXC futures spells the timeframes we support.
-    _INTERVALS = {"1h": "Min60", "4h": "Hour4", "1d": "Day1"}
+    _INTERVALS = {"1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30",
+                  "1h": "Min60", "4h": "Hour4", "1d": "Day1", "1w": "Week1"}
 
     def get_closes(self, symbol, interval, limit):
         """Closing prices (oldest first) for the strategy to read."""

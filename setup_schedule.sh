@@ -9,6 +9,7 @@
 #   ./setup_schedule.sh            # run daily at 09:00 (default)
 #   ./setup_schedule.sh 18 30      # run daily at 18:30
 #   ./setup_schedule.sh hourly     # run every hour (for INTERVAL="1h")
+#   ./setup_schedule.sh minute     # run every minute (for INTERVAL="1m")
 #   ./setup_schedule.sh --remove   # stop the scheduled runs
 
 set -euo pipefail
@@ -28,7 +29,11 @@ fi
 
 chmod +x "$RUNNER"
 
-if [ "${1:-}" = "hourly" ]; then
+if [ "${1:-}" = "minute" ]; then
+  # every minute (cron's fastest). Match with INTERVAL="1m" in config.py.
+  schedule="* * * * *"
+  human="every minute"
+elif [ "${1:-}" = "hourly" ]; then
   # minute=0, every hour -> runs at the top of every hour, every day.
   schedule="0 * * * *"
   human="every hour, on the hour"

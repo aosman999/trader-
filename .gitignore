@@ -12,3 +12,4 @@ venv/
 
 keys.env
 mexc_spot_state.json
+mexc_hwm.json

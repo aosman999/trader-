@@ -19,10 +19,19 @@ import math
 import random
 import urllib.request
 
-# How each source spells the timeframes we support.
-_BINANCE = {"1h": "1h", "4h": "4h", "1d": "1d"}
-_COINBASE = {"1h": 3600, "4h": 14400, "1d": 86400}     # granularity in seconds
-_KRAKEN = {"1h": 60, "4h": 240, "1d": 1440}            # interval in minutes
+# How each source spells the timeframes we support. A source that doesn't
+# support a given timeframe simply raises (KeyError) and we fall through to the
+# next source.
+_BINANCE = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w"}
+_COINBASE = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400}  # seconds
+_KRAKEN = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240,
+           "1d": 1440, "1w": 10080}                    # interval in minutes
+# CryptoCompare: (endpoint, aggregate) per timeframe.
+_CRYPTOCOMPARE = {"1m": ("histominute", 1), "5m": ("histominute", 5),
+                  "15m": ("histominute", 15), "30m": ("histominute", 30),
+                  "1h": ("histohour", 1), "4h": ("histohour", 4),
+                  "1d": ("histoday", 1), "1w": ("histoday", 7)}
 
 
 def _http_get_json(url):
@@ -61,9 +70,7 @@ def _from_kraken(symbol, interval, limit):
 
 
 def _from_cryptocompare(symbol, interval, limit):
-    # CryptoCompare has per-hour and per-day endpoints; "4h" = hourly aggregated.
-    endpoint = "histoday" if interval == "1d" else "histohour"
-    aggregate = 4 if interval == "4h" else 1
+    endpoint, aggregate = _CRYPTOCOMPARE[interval]
     url = (f"https://min-api.cryptocompare.com/data/v2/{endpoint}"
            f"?fsym={symbol}&tsym=USD&limit={limit}&aggregate={aggregate}")
     rows = _http_get_json(url)["Data"]["Data"]    # oldest -> newest

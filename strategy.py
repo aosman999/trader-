@@ -53,17 +53,32 @@ def rsi(prices, period):
     return 100 - (100 / (1 + rs))
 
 
-def _risk_exit(price_now, entry_price):
-    """Shared safety net used by every strategy while holding. Returns a
-    (action, reason) SELL tuple if a risk rule fires, else None."""
+def trend_up(prices):
+    """True if this timeframe is in an uptrend (fast average above slow).
+    Used for multi-timeframe confirmation before entering a trade."""
+    fast = simple_moving_average(prices, config.SMA_FAST)
+    slow = simple_moving_average(prices, config.SMA_SLOW)
+    return fast is not None and slow is not None and fast > slow
+
+
+def _risk_exit(price_now, entry_price, high_water):
+    """Shared safety net used while holding. Returns a (action, reason) SELL
+    tuple if a risk rule fires, else None.
+
+      * Hard stop-loss from entry -- caps the loss if the trade goes wrong fast.
+      * Trailing stop -- once the price has risen, lock in gains by exiting if it
+        falls TRAIL_PCT below the highest price seen since entry. This lets a
+        winner run far above +16% while protecting the profit.
+    """
     if not entry_price:
         return None
     if price_now <= entry_price * (1 - config.STOP_LOSS_PCT):
         return "SELL", (f"stop-loss hit (down "
                         f"{(1 - price_now / entry_price) * 100:.1f}%)")
-    if price_now >= entry_price * (1 + config.TAKE_PROFIT_PCT):
-        return "SELL", (f"take-profit hit (up "
-                        f"{(price_now / entry_price - 1) * 100:.1f}%)")
+    if high_water and price_now <= high_water * (1 - config.TRAIL_PCT):
+        gain = (price_now / entry_price - 1) * 100
+        return "SELL", (f"trailing stop ({config.TRAIL_PCT * 100:.0f}% off peak; "
+                        f"locking in {gain:+.1f}% from entry)")
     return None
 
 
@@ -136,13 +151,12 @@ def _decide_pro(prices, holding):
     price_now = prices[-1]
 
     if holding:
-        # Exit reason 1: the uptrend broke (fast crossed back below slow).
+        # Exit when the uptrend breaks (fast crosses back below slow). We do NOT
+        # exit just because momentum is high -- the trailing stop in _risk_exit
+        # takes profits instead, so a strong winner is free to keep running.
         if fast_prev >= slow_prev and fast_now < slow_now:
             return "SELL", "trend broke down (fast crossed below slow)"
-        # Exit reason 2: momentum overheated -> lock in the gain.
-        if rsi_now is not None and rsi_now >= config.RSI_SELL:
-            return "SELL", f"overbought (RSI {rsi_now:.0f}); locking in gains"
-        return "HOLD", "trend healthy; holding"
+        return "HOLD", "trend healthy; letting it run (trailing stop active)"
 
     # Entry: require ALL of these to agree -- the more filters, the fewer but
     # higher-quality the trades. We only take setups where the trend is clearly
@@ -198,10 +212,11 @@ STRATEGIES = {
 }
 
 
-def decide(prices, holding, entry_price, strategy_name=None):
+def decide(prices, holding, entry_price, high_water=0.0, strategy_name=None):
     """Top-level decision. Picks the strategy (defaults to config.STRATEGY),
-    but ALWAYS checks the stop-loss / take-profit safety net first.
+    but ALWAYS checks the stop-loss / trailing-stop safety net first.
 
+    `high_water` is the highest price seen since entry (for the trailing stop).
     Returns (action, reason) where action is "BUY", "SELL", or "HOLD".
     """
     name = strategy_name or config.STRATEGY
@@ -214,7 +229,7 @@ def decide(prices, holding, entry_price, strategy_name=None):
     # Safety net comes first: if we're holding and a risk rule fires, exit now
     # regardless of what the strategy thinks.
     if holding:
-        exit_signal = _risk_exit(price_now, entry_price)
+        exit_signal = _risk_exit(price_now, entry_price, high_water)
         if exit_signal:
             return exit_signal
 

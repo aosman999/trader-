@@ -26,7 +26,8 @@ import strategy
 def run_backtest(prices, strategy_name):
     """Replay one named strategy over the price history. Returns
     (final_value, trades_made, winning_sells)."""
-    state = {"cash": config.STARTING_CASH, "coins": 0.0, "entry_price": 0.0}
+    state = {"cash": config.STARTING_CASH, "coins": 0.0, "entry_price": 0.0,
+             "high_water": 0.0}
     trades = 0
     wins = 0
 
@@ -35,7 +36,10 @@ def run_backtest(prices, strategy_name):
         window = prices[:day + 1]
         price = window[-1]
         holding = state["coins"] > 0
+        if holding:
+            state["high_water"] = max(state["high_water"], price)
         action, _ = strategy.decide(window, holding, state["entry_price"],
+                                    high_water=state["high_water"],
                                     strategy_name=strategy_name)
 
         if action == "BUY" and not holding:
@@ -45,6 +49,7 @@ def run_backtest(prices, strategy_name):
                 state["coins"] += (spend - fee) / price
                 state["cash"] -= spend
                 state["entry_price"] = price
+                state["high_water"] = price
                 trades += 1
         elif action == "SELL" and holding:
             entry = state["entry_price"]
@@ -52,6 +57,7 @@ def run_backtest(prices, strategy_name):
             state["cash"] += proceeds - proceeds * config.FEE_PCT
             state["coins"] = 0.0
             state["entry_price"] = 0.0
+            state["high_water"] = 0.0
             if price > entry:
                 wins += 1
 

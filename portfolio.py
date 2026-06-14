@@ -26,7 +26,7 @@ def load():
         with open(config.STATE_FILE) as f:
             return json.load(f)
     return {"cash": config.STARTING_CASH, "symbol": None,
-            "coins": 0.0, "entry_price": 0.0}
+            "coins": 0.0, "entry_price": 0.0, "high_water": 0.0}
 
 
 def save(state):
@@ -70,6 +70,7 @@ def buy(state, symbol, price):
     state["symbol"] = symbol
     state["coins"] = coins_bought
     state["entry_price"] = price
+    state["high_water"] = price                  # peak starts at entry
     _log_trade("BUY", symbol, price, coins_bought, spend, state)
     return (f"BUY  {coins_bought:.8f} {symbol} at ${price:,.2f} "
             f"(spent ${spend:,.2f}, fee ${fee:,.2f})")
@@ -88,6 +89,7 @@ def sell(state, price):
     entry = state["entry_price"]
     state["entry_price"] = 0.0
     state["symbol"] = None
+    state["high_water"] = 0.0
     _log_trade("SELL", symbol, price, coins, proceeds, state)
     pnl = ""
     if entry:

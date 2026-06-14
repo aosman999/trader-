@@ -87,7 +87,8 @@ class MexcClient:
         return float(data["price"])
 
     # How MEXC spot spells the timeframes we support.
-    _INTERVALS = {"1h": "60m", "4h": "4h", "1d": "1d"}
+    _INTERVALS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+                  "1h": "60m", "4h": "4h", "1d": "1d", "1w": "1W"}
 
     def get_closes(self, symbol, interval, limit):
         """Closing prices (oldest first) straight from MEXC. Public.

@@ -63,10 +63,11 @@ class PaperBroker:
         self.use_demo = use_demo
         self.state = portfolio.load()
 
-    def get_prices(self, symbol):
+    def get_prices(self, symbol, interval=None):
         if self.use_demo:
             return data.demo_closes(config.HISTORY_DAYS, seed=_demo_seed(symbol))
-        return data.get_closes(symbol, config.INTERVAL, config.HISTORY_DAYS)
+        return data.get_closes(symbol, interval or config.INTERVAL,
+                               config.HISTORY_DAYS)
 
     def cash(self):
         return self.state["cash"]
@@ -75,8 +76,16 @@ class PaperBroker:
         if self.state["coins"] > 0 and self.state.get("symbol"):
             return {"symbol": self.state["symbol"],
                     "amount": self.state["coins"],
-                    "entry": self.state["entry_price"]}
+                    "entry": self.state["entry_price"],
+                    "high_water": self.state.get("high_water")
+                    or self.state["entry_price"]}
         return None
+
+    def update_high_water(self, symbol, entry, price):
+        hw = max(self.state.get("high_water") or entry, price)
+        self.state["high_water"] = hw
+        portfolio.save(self.state)
+        return hw
 
     def position_value(self, symbol, amount, price):
         return amount * price
@@ -103,8 +112,9 @@ class MexcBroker:
         import mexc
         self.client = mexc.MexcClient()
 
-    def get_prices(self, symbol):
-        return self.client.get_closes(symbol + "USDT", config.INTERVAL,
+    def get_prices(self, symbol, interval=None):
+        return self.client.get_closes(symbol + "USDT",
+                                      interval or config.INTERVAL,
                                       config.HISTORY_DAYS)
 
     def cash(self):
@@ -126,7 +136,16 @@ class MexcBroker:
             os.remove(self.STATE_FILE)
             return None
         return {"symbol": symbol, "amount": amount,
-                "entry": st.get("entry", 0.0)}
+                "entry": st.get("entry", 0.0),
+                "high_water": st.get("high_water") or st.get("entry", 0.0)}
+
+    def update_high_water(self, symbol, entry, price):
+        st = self._load()
+        hw = max(st.get("high_water") or entry, price)
+        st["high_water"] = hw
+        with open(self.STATE_FILE, "w") as f:
+            json.dump(st, f)
+        return hw
 
     def position_value(self, symbol, amount, price):
         return amount * price
@@ -141,7 +160,7 @@ class MexcBroker:
         if result.get("dry_run"):
             return f"DRY-RUN: would BUY ~${usd:,.2f} of {symbol} (nothing placed)"
         with open(self.STATE_FILE, "w") as f:
-            json.dump({"symbol": symbol, "entry": price}, f)
+            json.dump({"symbol": symbol, "entry": price, "high_water": price}, f)
         return f"BUY ~${usd:,.2f} of {symbol} at ~${price:,.2f} [REAL ORDER]"
 
     def close(self, symbol, amount, price):
@@ -160,6 +179,7 @@ class MexcFuturesBroker:
 
     label = "MEXC FUTURES (REAL, leveraged)"
     is_live = True
+    HWM_FILE = "mexc_hwm.json"   # tracks the peak price since entry (for trailing)
 
     def __init__(self):
         import mexc_futures
@@ -170,9 +190,24 @@ class MexcFuturesBroker:
     def _pair(symbol):
         return symbol + "_USDT"
 
-    def get_prices(self, symbol):
-        return self.client.get_closes(self._pair(symbol), config.INTERVAL,
+    def get_prices(self, symbol, interval=None):
+        return self.client.get_closes(self._pair(symbol),
+                                      interval or config.INTERVAL,
                                       config.HISTORY_DAYS)
+
+    def _stored_hwm(self, symbol):
+        if os.path.exists(self.HWM_FILE):
+            with open(self.HWM_FILE) as f:
+                d = json.load(f)
+            if d.get("symbol") == symbol:
+                return d.get("high_water", 0.0)
+        return 0.0
+
+    def update_high_water(self, symbol, entry, price):
+        hw = max(self._stored_hwm(symbol) or entry, price)
+        with open(self.HWM_FILE, "w") as f:
+            json.dump({"symbol": symbol, "high_water": hw}, f)
+        return hw
 
     def _contract_size(self, pair):
         if pair not in self._sizes:
@@ -186,7 +221,9 @@ class MexcFuturesBroker:
         pair, vol, entry = self.client.any_long_position()
         if not pair:
             return None
-        return {"symbol": pair.split("_")[0], "amount": vol, "entry": entry}
+        symbol = pair.split("_")[0]
+        return {"symbol": symbol, "amount": vol, "entry": entry,
+                "high_water": self._stored_hwm(symbol) or entry}
 
     def position_value(self, symbol, amount, price):
         return amount * self._contract_size(self._pair(symbol)) * price
@@ -214,4 +251,6 @@ class MexcFuturesBroker:
         if result.get("dry_run"):
             return (f"DRY-RUN: would CLOSE {amount} {symbol} contracts "
                     f"[nothing placed]")
+        if os.path.exists(self.HWM_FILE):
+            os.remove(self.HWM_FILE)
         return f"CLOSE {amount} {symbol} contracts at ~${price:,.2f} [REAL ORDER]"

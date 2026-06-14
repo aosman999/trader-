@@ -30,6 +30,22 @@ import notify
 import strategy
 
 
+def _count_trend_agreement(broker, symbol):
+    """Check the trend on every timeframe in config.TIMEFRAMES. Returns
+    (how_many_are_in_uptrend, how_many_we_could_check)."""
+    agree = 0
+    checked = 0
+    for tf in config.TIMEFRAMES:
+        try:
+            prices = broker.get_prices(symbol, tf)
+        except Exception:  # noqa: BLE001 - a timeframe we can't fetch is skipped
+            continue
+        checked += 1
+        if strategy.trend_up(prices):
+            agree += 1
+    return agree, checked
+
+
 def _manage_open_position(broker, pos):
     """We already hold a coin: check the floor, then decide sell/hold on it."""
     symbol = pos["symbol"]
@@ -50,7 +66,11 @@ def _manage_open_position(broker, pos):
         print("  Trading halted. Review before resuming.\n")
         return
 
-    action, reason = strategy.decide(prices, True, pos["entry"])
+    # Update the peak-since-entry, then decide (the trailing stop uses it).
+    high_water = broker.update_high_water(symbol, pos["entry"], price)
+    action, reason = strategy.decide(prices, True, pos["entry"],
+                                     high_water=high_water)
+    print(f"  Peak     : ${high_water:,.2f}")
     print(f"  Decision : {action}  --  {reason}")
     if action == "SELL":
         msg = broker.close(symbol, pos['amount'], price)
@@ -69,21 +89,31 @@ def _scan_and_maybe_enter(broker):
         return
 
     best = None   # (score, symbol, price, reason)
-    print(f"  Scanning {len(config.WATCHLIST)} coins for a high-quality setup...")
+    print(f"  Scanning {len(config.WATCHLIST)} coins on the {config.INTERVAL} "
+          f"timeframe...")
     for symbol in config.WATCHLIST:
         try:
-            prices = broker.get_prices(symbol)
+            prices = broker.get_prices(symbol, config.INTERVAL)
         except Exception as exc:  # noqa: BLE001 - skip a coin we can't price
             print(f"    {symbol:<5} skipped ({str(exc).splitlines()[0][:40]})")
             continue
         action, reason = strategy.decide(prices, False, 0.0)
-        if action == "BUY":
-            score = strategy.momentum_score(prices)
-            print(f"    {symbol:<5} BUY signal (strength {score * 100:+.1f}%)")
-            if best is None or score > best[0]:
-                best = (score, symbol, prices[-1], reason)
-        else:
+        if action != "BUY":
             print(f"    {symbol:<5} {action.lower()}")
+            continue
+
+        # Multi-timeframe confirmation: only enter if enough timeframes agree
+        # the trend is up. Trade WITH the bigger market structure.
+        agree, checked = _count_trend_agreement(broker, symbol)
+        if agree < config.MIN_TF_AGREE:
+            print(f"    {symbol:<5} BUY but only {agree}/{checked} timeframes "
+                  f"agree (need {config.MIN_TF_AGREE}); skip")
+            continue
+        score = strategy.momentum_score(prices)
+        print(f"    {symbol:<5} BUY confirmed ({agree}/{checked} timeframes, "
+              f"strength {score * 100:+.1f}%)")
+        if best is None or score > best[0]:
+            best = (score, symbol, prices[-1], reason)
 
     if best is None:
         print("  No coin has a high-quality setup right now. Staying in cash.\n")

@@ -81,10 +81,12 @@ FLOOR_USD = 12.0
 #   the capital floor + isolated-margin sizing matter so much.
 STOP_LOSS_PCT = 0.04
 
-# Take-profit: lock in the gain at this move. 0.16 = +16% = 4x the 4% stop (4:1).
-# The trade-off of a far target: wins happen LESS often (price must travel
-# further), but each win is large. Keep TAKE_PROFIT_PCT = 4 x STOP_LOSS_PCT.
-TAKE_PROFIT_PCT = 0.16
+# Trailing take-profit: instead of a fixed target, let winners RUN. We remember
+# the highest price reached since entry, and only exit once price falls this far
+# below that peak. So a strong trade can lock in WAY more than 16%, while one
+# that stalls early exits for less -- the exit adapts to each move.
+# 0.05 = exit if price drops 5% from its peak since we entered.
+TRAIL_PCT = 0.05
 
 # ---------------------------------------------------------------------------
 # WHICH STRATEGY TO USE
@@ -125,17 +127,28 @@ RSI_SELL = 70   # sell when RSI rises above this
 DONCHIAN_DAYS = 20
 
 # TIMEFRAME -- the size of each price candle the strategy looks at:
-#   "1h" = hourly, "4h" = every 4 hours, "1d" = daily.
-# Run the bot on the SAME rhythm (see SCHEDULING.md). Hourly means it can take
-# several trades in a day when good setups appear, or none on a quiet day --
-# exactly the "0 some days, 1+ other days" behaviour you want. Daily means at
-# most one decision per day. Finer timeframes = more chances but more fees.
-INTERVAL = "1h"
+#   "1m" = 1 minute, "1h" = hourly, "4h", "1d" = daily.
+# Run the bot on the SAME rhythm (see SCHEDULING.md). "1m" + an every-minute
+# schedule means it checks for trades every minute and reacts fast -- but it
+# also trades MORE often, and MEXC charges a fee (~0.06-0.08%) on every entry
+# and exit, which adds up on a small account. Coarser timeframes trade less.
+INTERVAL = "1m"
 
 # How many candles of history to download each run. Must be comfortably larger
-# than SMA_SLOW so the moving averages have enough data. (At "1h", 120 candles
-# is the last 5 days.)
+# than SMA_SLOW so the moving averages have enough data.
 HISTORY_DAYS = 120
+
+# MULTI-TIMEFRAME CONFIRMATION.
+# Before entering, the bot checks the trend on ALL of these timeframes and only
+# buys when enough of them agree the trend is up -- so it trades WITH the bigger
+# market structure, not against it. INTERVAL above is the "primary" timeframe it
+# triggers and exits on; these are the timeframes it checks for agreement.
+TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+
+# How many of those timeframes must be in an uptrend to allow a BUY.
+# Higher = stricter (fewer, higher-quality trades). len(TIMEFRAMES) = all must
+# agree. Lower it for more trades.
+MIN_TF_AGREE = 6
 
 # ---------------------------------------------------------------------------
 # REALISM
