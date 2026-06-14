@@ -303,8 +303,15 @@ def _scan_setups(broker):
             continue
         action, _ = strategy.decide(prices, False, 0.0)
         if action == "BUY":
+            # Support/Resistance: skip if jammed under resistance (no room).
+            if config.USE_SR and not strategy.has_room(prices, "long",
+                                                       config.SR_MIN_ROOM):
+                continue
             long_cands.append((strategy.momentum_score(prices), symbol, prices[-1]))
         elif config.FUTURES_SIGNALS and strategy.short_signal(prices):
+            if config.USE_SR and not strategy.has_room(prices, "short",
+                                                       config.SR_MIN_ROOM):
+                continue
             # short strength: how far the fast average sits BELOW the slow.
             short_cands.append((-strategy.momentum_score(prices), symbol, prices[-1]))
     long_cands.sort(reverse=True)

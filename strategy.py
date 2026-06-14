@@ -53,6 +53,38 @@ def rsi(prices, period):
     return 100 - (100 / (1 + rs))
 
 
+def swing_levels(prices, k=3):
+    """Find recent support (swing lows) and resistance (swing highs) -- prices
+    that stood out as a local low/high with `k` candles lower/higher on each
+    side. Returns (resistances, supports)."""
+    highs, lows = [], []
+    for i in range(k, len(prices) - k):
+        window = prices[i - k:i + k + 1]
+        if prices[i] == max(window):
+            highs.append(prices[i])
+        if prices[i] == min(window):
+            lows.append(prices[i])
+    return highs, lows
+
+
+def has_room(prices, direction, min_room):
+    """Support/Resistance filter. For a LONG, True if there's at least `min_room`
+    (fraction) of clear space up to the nearest resistance -- i.e. we're NOT
+    buying right into a ceiling. Mirror for a SHORT (room down to support).
+    True when there's no level in the way (clear sky)."""
+    price = prices[-1]
+    highs, lows = swing_levels(prices)
+    if direction == "long":
+        above = [h for h in highs if h > price * 1.001]
+        if not above:
+            return True                       # clear sky above
+        return (min(above) - price) / price >= min_room
+    below = [l for l in lows if l < price * 0.999]
+    if not below:
+        return True                           # clear floor below (for a short)
+    return (price - max(below)) / price >= min_room
+
+
 def trend_up(prices):
     """True if this timeframe is in an uptrend (fast average above slow).
     Used for multi-timeframe confirmation before a LONG."""

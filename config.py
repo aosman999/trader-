@@ -109,6 +109,13 @@ TIMEFRAMES = [c.strip() for c in
               _s("TIMEFRAMES", "1m,5m,15m,30m,1h,4h,1d,1w").split(",") if c.strip()]
 MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 
+# SUPPORT/RESISTANCE filter. When "true", a setup must also have room to run --
+# a LONG won't enter right under a resistance level, a SHORT won't enter right
+# above support. SR_MIN_ROOM is the clear space required (0.03 = 3%).
+# export USE_SR="true"
+USE_SR = _s("USE_SR", "false").strip().lower() in ("true", "1", "yes", "on")
+SR_MIN_ROOM = _f("SR_MIN_ROOM", "0.03")
+
 # DON'T SIT IDLE TOO LONG. If MAX_IDLE_DAYS > 0 and no trade has happened in that
 # many days, the bot takes the BEST available candidate even without full
 # multi-timeframe confirmation -- so it never goes longer than this without
