@@ -113,7 +113,11 @@ def main():
     print(f"\n=== Trading bot | watchlist {','.join(config.WATCHLIST)} | "
           f"{broker.label}{' | DEMO data' if use_demo else ''} ===")
     if broker.is_live:
-        print("  (real account; orders still gated by the client's dry-run)")
+        dry = getattr(getattr(broker, "client", None), "dry_run", True)
+        if dry:
+            print("  (real account; DRY-RUN on -- decides trades, places NONE)")
+        else:
+            print("  (real account; LIVE -- it WILL place REAL orders / real money)")
 
     try:
         pos = broker.current_position()
