@@ -39,7 +39,8 @@ else
   human="$(printf 'every day at %02d:%02d' "$HOUR" "$MIN")"
 fi
 
-new_line="$schedule $RUNNER $TAG"
+# Quote the runner path so a folder name containing spaces still works.
+new_line="$schedule \"$RUNNER\" $TAG"
 printf '%s\n%s\n' "$current" "$new_line" | grep -v '^$' | crontab -
 
 echo "Scheduled: the bot will run $human."
