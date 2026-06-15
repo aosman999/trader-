@@ -116,6 +116,13 @@ MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 USE_SR = _s("USE_SR", "false").strip().lower() in ("true", "1", "yes", "on")
 SR_MIN_ROOM = _f("SR_MIN_ROOM", "0.03")
 
+# S/R BOUNCE entries. When "true", ALSO enter on a bounce: long when price sits
+# on support AND buyers dominate; short when on resistance AND sellers dominate.
+# This adds entry opportunities on top of the momentum signal. export USE_SR_BOUNCE="true"
+USE_SR_BOUNCE = _s("USE_SR_BOUNCE", "false").strip().lower() in (
+    "true", "1", "yes", "on")
+SR_TOL = _f("SR_TOL", "0.01")   # how close to the level counts as "on" it (1%)
+
 # BUY/SELL POWER filter. When "true", measures buying vs selling pressure from
 # recent volume (volume on up-candles / total). A LONG needs buyers in control
 # (>= BUY_POWER_MIN); a SHORT needs sellers in control (<= 1 - BUY_POWER_MIN).

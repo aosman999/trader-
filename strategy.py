@@ -85,6 +85,22 @@ def has_room(prices, direction, min_room):
     return (price - max(below)) / price >= min_room
 
 
+def at_support(prices, tol):
+    """True if price is sitting right on a support level (a swing low) -- within
+    `tol` (fraction). A bounce-long candidate."""
+    price = prices[-1]
+    _, lows = swing_levels(prices)
+    return any(l > 0 and abs(price - l) / l <= tol for l in lows)
+
+
+def at_resistance(prices, tol):
+    """True if price is sitting right on a resistance level (a swing high).
+    A bounce-short candidate."""
+    price = prices[-1]
+    highs, _ = swing_levels(prices)
+    return any(h > 0 and abs(price - h) / h <= tol for h in highs)
+
+
 def trend_up(prices):
     """True if this timeframe is in an uptrend (fast average above slow).
     Used for multi-timeframe confirmation before a LONG."""
