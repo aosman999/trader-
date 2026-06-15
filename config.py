@@ -122,6 +122,10 @@ SR_MIN_ROOM = _f("SR_MIN_ROOM", "0.03")
 USE_SR_BOUNCE = _s("USE_SR_BOUNCE", "false").strip().lower() in (
     "true", "1", "yes", "on")
 SR_TOL = _f("SR_TOL", "0.01")   # how close to the level counts as "on" it (1%)
+# A bounce is confirmed when the level shows up on at least this many timeframes
+# (multi-timeframe S/R confluence -- a stronger level). 1 = just the primary
+# timeframe (no confluence required). export BOUNCE_TF_MIN="2"
+BOUNCE_TF_MIN = _i("BOUNCE_TF_MIN", "2")
 
 # BUY/SELL POWER filter. When "true", measures buying vs selling pressure from
 # recent volume (volume on up-candles / total). A LONG needs buyers in control

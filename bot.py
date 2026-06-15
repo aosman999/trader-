@@ -323,18 +323,25 @@ def _short_candidate(broker, symbol, prices):
 
 def _confirm_best(broker, cands, trend_fn, direction):
     """PRINT the top candidates and return (score, symbol, price, kind) of the
-    strongest CONFIRMED one. A 'momentum' setup needs multi-timeframe agreement;
-    a 'bounce' setup is already confirmed (support/resistance + buy-sell power)."""
+    strongest CONFIRMED one.
+      momentum -> needs the TREND to agree across MIN_TF_AGREE timeframes.
+      bounce   -> needs the support/resistance LEVEL to show up on BOUNCE_TF_MIN
+                  timeframes (multi-timeframe confluence -- a stronger level)."""
+    lvl = "support" if direction == "LONG" else "resistance"
+    at_level = ((lambda pr: strategy.at_support(pr, config.SR_TOL))
+                if direction == "LONG"
+                else (lambda pr: strategy.at_resistance(pr, config.SR_TOL)))
     best = None
     for score, symbol, price, kind in cands[:SHOW_TOP_SETUPS]:
         if kind == "bounce":
-            confirmed = True
-            note = "bounce off " + ("support" if direction == "LONG"
-                                    else "resistance")
+            agree, checked = _count_agreement(broker, symbol, at_level)
+            confirmed = agree >= config.BOUNCE_TF_MIN
+            note = (f"on {lvl} {agree}/{checked} TF"
+                    + ("" if confirmed else f" (need {config.BOUNCE_TF_MIN})"))
         else:
             agree, checked = _count_agreement(broker, symbol, trend_fn)
             confirmed = agree >= config.MIN_TF_AGREE
-            note = (f"{agree}/{checked} timeframes"
+            note = (f"trend {agree}/{checked} TF"
                     + ("" if confirmed else f" (need {config.MIN_TF_AGREE})"))
         print(f"    {direction:<5} {symbol:<10} strength {score * 100:+6.2f}%   "
               f"{note}   [{'CONFIRMED' if confirmed else 'no'}]")
