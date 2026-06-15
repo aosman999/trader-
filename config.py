@@ -87,6 +87,12 @@ TRAIL_PCT = _f("TRAIL_PCT", "0.05")
 # "sma", "rsi", "breakout", or "pro" (the selective multi-signal one).
 STRATEGY = _s("STRATEGY", "pro")
 
+# When "true", a momentum entry fires if ANY built-in strategy (sma, rsi,
+# breakout, pro) signals -- not just the one in STRATEGY above. More setups,
+# more trades. export USE_ALL_STRATEGIES="true"
+USE_ALL_STRATEGIES = _s("USE_ALL_STRATEGIES", "false").strip().lower() in (
+    "true", "1", "yes", "on")
+
 SMA_FAST = _i("SMA_FAST", "10")     # fast moving average length
 SMA_SLOW = _i("SMA_SLOW", "30")     # slow moving average length
 

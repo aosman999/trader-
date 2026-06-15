@@ -268,11 +268,20 @@ def _decide_breakout(prices, holding):
     return "HOLD", "no breakout yet; waiting in cash"
 
 
+def any_long_signal(prices):
+    """True if ANY of the built-in strategies (sma, rsi, breakout, pro) signals a
+    BUY here -- so the bot can take a good setup from any of them, not just the
+    one configured in STRATEGY."""
+    for name in STRATEGIES:
+        action, _ = decide(prices, False, 0.0, strategy_name=name)
+        if action == "BUY":
+            return True
+    return False
+
+
 def momentum_score(prices):
     """A number for RANKING coins that all have a BUY signal: higher = stronger.
-    When the bot scans its watchlist and several coins look buyable, it picks the
-    one with the highest score. Uses how far the fast average sits above the slow
-    average (trend strength) -- a steadier, stronger uptrend scores higher."""
+    Uses how far the fast average sits above the slow average (trend strength)."""
     fast = simple_moving_average(prices, config.SMA_FAST)
     slow = simple_moving_average(prices, config.SMA_SLOW)
     if not fast or not slow:

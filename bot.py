@@ -284,7 +284,8 @@ def _manage_open_position(broker, pos):
 def _long_candidate(broker, symbol, prices, action):
     """Decide if `symbol` is a LONG candidate and how. Returns (score, kind) or
     None. kind is 'momentum' (trend signal) or 'bounce' (off support + buyers)."""
-    momentum = (action == "BUY")
+    momentum = (strategy.any_long_signal(prices) if config.USE_ALL_STRATEGIES
+                else action == "BUY")
     at_sup = config.USE_SR_BOUNCE and strategy.at_support(prices, config.SR_TOL)
     if not (momentum or at_sup):
         return None
