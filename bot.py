@@ -281,148 +281,144 @@ def _manage_open_position(broker, pos):
             f"peak ${high_water:,.4f})"), False
 
 
-def _long_candidate(broker, symbol, prices, action):
-    """Decide if `symbol` is a LONG candidate and how. Returns (score, kind) or
-    None. kind is 'momentum' (trend signal) or 'bounce' (off support + buyers)."""
-    momentum = (strategy.any_long_signal(prices) if config.USE_ALL_STRATEGIES
-                else action == "BUY")
-    at_sup = config.USE_SR_BOUNCE and strategy.at_support(prices, config.SR_TOL)
-    if not (momentum or at_sup):
-        return None
-    bp = broker.buy_power(symbol) if (config.USE_BUY_POWER or at_sup) else 1.0
-    bounce = at_sup and bp >= config.BUY_POWER_MIN
-    if not (momentum or bounce):
-        return None
-    # shared confirmations
-    if config.USE_SR and not strategy.has_room(prices, "long", config.SR_MIN_ROOM):
-        return None
-    if config.USE_BUY_POWER and bp < config.BUY_POWER_MIN:
-        return None
-    if config.USE_VOLUME and broker.volume_ratio(symbol) < config.VOL_MIN_RATIO:
-        return None
-    return strategy.momentum_score(prices), ("momentum" if momentum else "bounce")
+EVAL_CAP = 12   # max triggered coins to fully evaluate per run (API budget)
 
 
-def _short_candidate(broker, symbol, prices):
-    """Decide if `symbol` is a SHORT candidate. Returns (score, kind) or None."""
-    momentum = strategy.short_signal(prices)
-    at_res = config.USE_SR_BOUNCE and strategy.at_resistance(prices, config.SR_TOL)
-    if not (momentum or at_res):
-        return None
-    bp = broker.buy_power(symbol) if (config.USE_BUY_POWER or at_res) else 0.0
-    bounce = at_res and bp <= (1 - config.BUY_POWER_MIN)
-    if not (momentum or bounce):
-        return None
-    if config.USE_SR and not strategy.has_room(prices, "short", config.SR_MIN_ROOM):
-        return None
-    if config.USE_BUY_POWER and bp > (1 - config.BUY_POWER_MIN):
-        return None
-    if config.USE_VOLUME and broker.volume_ratio(symbol) < config.VOL_MIN_RATIO:
-        return None
-    return -strategy.momentum_score(prices), ("momentum" if momentum else "bounce")
+def _tf_prices(broker, symbol):
+    """Fetch each timeframe's candles once (for trend + S/R-confluence checks)."""
+    out = []
+    for tf in config.TIMEFRAMES:
+        try:
+            out.append(broker.get_prices(symbol, tf))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
-def _confirm_best(broker, cands, trend_fn, direction):
-    """PRINT the top candidates and return (score, symbol, price, kind) of the
-    strongest CONFIRMED one.
-      momentum -> needs the TREND to agree across MIN_TF_AGREE timeframes.
-      bounce   -> needs the support/resistance LEVEL to show up on BOUNCE_TF_MIN
-                  timeframes (multi-timeframe confluence -- a stronger level)."""
-    lvl = "support" if direction == "LONG" else "resistance"
-    at_level = ((lambda pr: strategy.at_support(pr, config.SR_TOL))
-                if direction == "LONG"
-                else (lambda pr: strategy.at_resistance(pr, config.SR_TOL)))
-    best = None
-    for score, symbol, price, kind in cands[:SHOW_TOP_SETUPS]:
-        if kind == "bounce":
-            agree, checked = _count_agreement(broker, symbol, at_level)
-            confirmed = agree >= config.BOUNCE_TF_MIN
-            note = (f"on {lvl} {agree}/{checked} TF"
-                    + ("" if confirmed else f" (need {config.BOUNCE_TF_MIN})"))
-        else:
-            agree, checked = _count_agreement(broker, symbol, trend_fn)
-            confirmed = agree >= config.MIN_TF_AGREE
-            note = (f"trend {agree}/{checked} TF"
-                    + ("" if confirmed else f" (need {config.MIN_TF_AGREE})"))
-        print(f"    {direction:<5} {symbol:<10} strength {score * 100:+6.2f}%   "
-              f"{note}   [{'CONFIRMED' if confirmed else 'no'}]")
-        if confirmed and best is None:
-            best = (score, symbol, price, kind)
-    return best
+def _confirm_long(broker, symbol, prices, strat, sup):
+    """Count the LONG confirmations present; return (count, labels). The bot
+    enters when at least config.MIN_CONFIRMATIONS are present -- it does NOT need
+    all of them (e.g. support + volume is enough). Cheap checks first; the costly
+    multi-timeframe checks run only if still needed."""
+    labels = []
+    if strat:
+        labels.append("strategy")
+    if sup:
+        labels.append("support")
+    if config.USE_BUY_POWER and broker.buy_power(symbol) >= config.BUY_POWER_MIN:
+        labels.append("power")
+    if config.USE_VOLUME and broker.volume_ratio(symbol) >= config.VOL_MIN_RATIO:
+        labels.append("volume")
+    if config.USE_SR and strategy.has_room(prices, "long", config.SR_MIN_ROOM):
+        labels.append("room")
+    if len(labels) < config.MIN_CONFIRMATIONS:           # only then pay for TF scan
+        tfp = _tf_prices(broker, symbol)
+        if sum(strategy.trend_up(p) for p in tfp) >= config.MIN_TF_AGREE:
+            labels.append("trend")
+        if sup and sum(strategy.at_support(p, config.SR_TOL)
+                       for p in tfp) >= config.BOUNCE_TF_MIN:
+            labels.append("confluence")
+    return len(labels), labels
+
+
+def _confirm_short(broker, symbol, prices, strat, res):
+    """Count the SHORT confirmations present; return (count, labels)."""
+    labels = []
+    if strat:
+        labels.append("strategy")
+    if res:
+        labels.append("resistance")
+    if config.USE_BUY_POWER and broker.buy_power(symbol) <= (1 - config.BUY_POWER_MIN):
+        labels.append("power")
+    if config.USE_VOLUME and broker.volume_ratio(symbol) >= config.VOL_MIN_RATIO:
+        labels.append("volume")
+    if config.USE_SR and strategy.has_room(prices, "short", config.SR_MIN_ROOM):
+        labels.append("room")
+    if len(labels) < config.MIN_CONFIRMATIONS:
+        tfp = _tf_prices(broker, symbol)
+        if sum(strategy.trend_down(p) for p in tfp) >= config.MIN_TF_AGREE:
+            labels.append("trend")
+        if res and sum(strategy.at_resistance(p, config.SR_TOL)
+                       for p in tfp) >= config.BOUNCE_TF_MIN:
+            labels.append("confluence")
+    return len(labels), labels
 
 
 def _scan_setups(broker):
-    """Scan the whole universe and PRINT every forming setup. Returns
-    (best_long, long_cands, best_signal):
-      best_long   = (symbol, price, reason) confirmed LONG, for the spot auto-trade
-      long_cands  = ranked raw long candidates (for the max-idle fallback)
-      best_signal = (symbol, price, direction) strongest confirmed LONG *or* SHORT.
-    Runs every minute even while a spot trade is open, so signals keep coming."""
+    """Scan the universe. A coin is a candidate when it shows at least
+    MIN_CONFIRMATIONS confirmations (any combination -- e.g. support+volume, or
+    strategy+trend) -- it does NOT need all of them. Returns
+    (best_long, long_cands, raw_longs, best_signal)."""
     try:
         universe = broker.universe()
     except Exception as exc:  # noqa: BLE001
         print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
-        return None, [], None
+        return None, [], [], None
 
     src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
 
-    # Pass 1: collect long & short candidates (momentum or bounce).
-    long_cands = []    # (score, symbol, price, kind) -- passed all filters
-    short_cands = []   # (score, symbol, price, kind)
-    raw_longs = []     # (score, symbol, price) -- any strategy signal, NO filters
+    # Cheap pass: coins with a directional trigger (strategy signal or at S/R).
+    long_trig, short_trig, raw_longs = [], [], []
     for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
-        except Exception:  # noqa: BLE001 - skip a coin we can't price
+        except Exception:  # noqa: BLE001
             continue
         action, _ = strategy.decide(prices, False, 0.0)
-        # Raw signal (ignores the optional filters) -- the force-trade fallback.
-        raw_momentum = (strategy.any_long_signal(prices)
-                        if config.USE_ALL_STRATEGIES else action == "BUY")
-        if raw_momentum:
-            raw_longs.append((strategy.momentum_score(prices), symbol, prices[-1]))
-        lc = _long_candidate(broker, symbol, prices, action)
-        if lc:
-            long_cands.append((lc[0], symbol, prices[-1], lc[1]))
-            continue
-        if config.FUTURES_SIGNALS:
-            sc = _short_candidate(broker, symbol, prices)
-            if sc:
-                short_cands.append((sc[0], symbol, prices[-1], sc[1]))
-    long_cands.sort(reverse=True)
-    short_cands.sort(reverse=True)
+        strat = (strategy.any_long_signal(prices) if config.USE_ALL_STRATEGIES
+                 else action == "BUY")
+        sup = config.USE_SR_BOUNCE and strategy.at_support(prices, config.SR_TOL)
+        score = strategy.momentum_score(prices)
+        if strat:
+            raw_longs.append((score, symbol, prices[-1]))
+        if strat or sup:
+            long_trig.append((score, symbol, prices, strat, sup))
+        elif config.FUTURES_SIGNALS:
+            sstrat = strategy.short_signal(prices)
+            res = config.USE_SR_BOUNCE and strategy.at_resistance(prices, config.SR_TOL)
+            if sstrat or res:
+                short_trig.append((-score, symbol, prices, sstrat, res))
+    long_trig.sort(reverse=True)
+    short_trig.sort(reverse=True)
     raw_longs.sort(reverse=True)
 
-    if not (long_cands or short_cands):
+    if not (long_trig or short_trig):
         print("  Setups forming: none right now.")
     else:
-        print(f"  Setups forming (long {len(long_cands)}, short "
-              f"{len(short_cands)}):")
+        print(f"  Evaluating setups (need {config.MIN_CONFIRMATIONS}+ confirmations):")
 
-    # Pass 2: confirm. Momentum needs timeframe agreement; bounce is pre-confirmed.
-    best_long_full = _confirm_best(broker, long_cands, strategy.trend_up, "LONG")
-    best_short_full = None
+    # Expensive pass (capped): count confirmations, keep those that qualify.
+    long_cands = []
+    for score, symbol, prices, strat, sup in long_trig[:EVAL_CAP]:
+        n, labels = _confirm_long(broker, symbol, prices, strat, sup)
+        ok = n >= config.MIN_CONFIRMATIONS
+        print(f"    LONG  {symbol:<10} {score * 100:+6.2f}%  "
+              f"{'+'.join(labels) or 'trigger'}  [{n} {'OK' if ok else 'no'}]")
+        if ok:
+            long_cands.append((score, symbol, prices[-1], "+".join(labels)))
+
+    short_cands = []
     if config.FUTURES_SIGNALS:
-        best_short_full = _confirm_best(broker, short_cands, strategy.trend_down,
-                                        "SHORT")
+        for score, symbol, prices, strat, res in short_trig[:EVAL_CAP]:
+            n, labels = _confirm_short(broker, symbol, prices, strat, res)
+            ok = n >= config.MIN_CONFIRMATIONS
+            print(f"    SHORT {symbol:<10} {score * 100:+6.2f}%  "
+                  f"{'+'.join(labels) or 'trigger'}  [{n} {'OK' if ok else 'no'}]")
+            if ok:
+                short_cands.append((score, symbol, prices[-1], "+".join(labels)))
 
     best_long = None
-    if best_long_full:
-        kind = best_long_full[3]
-        reason = ("bounce off support" if kind == "bounce"
-                  else "multi-timeframe confirmed uptrend")
-        best_long = (best_long_full[1], best_long_full[2], reason)
+    if long_cands:
+        best_long = (long_cands[0][1], long_cands[0][2], long_cands[0][3])
 
-    # Best futures signal = whichever confirmed setup (long or short) is strongest.
-    best_signal = None  # (symbol, price, direction)
+    best_signal = None
     options = []
-    if best_long_full:
-        options.append((best_long_full[0], best_long_full[1], best_long_full[2],
-                        "LONG"))
-    if best_short_full:
-        options.append((best_short_full[0], best_short_full[1],
-                        best_short_full[2], "SHORT"))
+    if long_cands:
+        options.append((long_cands[0][0], long_cands[0][1], long_cands[0][2], "LONG"))
+    if short_cands:
+        options.append((short_cands[0][0], short_cands[0][1], short_cands[0][2],
+                        "SHORT"))
     if options:
         options.sort(reverse=True)
         _, sym, prc, direction = options[0]

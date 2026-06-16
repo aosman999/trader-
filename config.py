@@ -115,6 +115,12 @@ TIMEFRAMES = [c.strip() for c in
               _s("TIMEFRAMES", "1m,5m,15m,30m,1h,4h,1d,1w").split(",") if c.strip()]
 MIN_TF_AGREE = _i("MIN_TF_AGREE", "6")
 
+# A trade fires when at least this many CONFIRMATIONS line up -- in ANY
+# combination (strategy, support/resistance, trend, buy/sell power, volume,
+# room, S/R confluence). It does NOT need all of them. 2 = a solid pair like
+# "support + volume" is enough; 3 = stricter. export MIN_CONFIRMATIONS="2"
+MIN_CONFIRMATIONS = _i("MIN_CONFIRMATIONS", "2")
+
 # SUPPORT/RESISTANCE filter. When "true", a setup must also have room to run --
 # a LONG won't enter right under a resistance level, a SHORT won't enter right
 # above support. SR_MIN_ROOM is the clear space required (0.03 = 3%).
