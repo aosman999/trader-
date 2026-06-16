@@ -450,11 +450,11 @@ def _maybe_enter_spot(broker, best, buy_cands, raw_longs):
     if best is None and _should_force_trade():
         pool = buy_cands or raw_longs
         if pool:
-            symbol, price = pool[0][1], pool[0][2]
-            best = (symbol, price,
+            fsym, fprice = pool[0][1], pool[0][2]
+            best = (fsym, fprice,
                     f"FORCED: {_idle_days()} days idle (filters relaxed)")
-        print(f"  No confirmed setup, but idle {_idle_days()} days -> forcing "
-              f"best available: {symbol}")
+            print(f"  No confirmed setup, but idle {_idle_days()} days -> "
+                  f"forcing best available: {fsym}")
 
     if best is None:
         idle = f" | idle {_idle_days()}d" if config.MAX_IDLE_DAYS else ""
