@@ -368,14 +368,20 @@ def _scan_setups(broker):
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
 
     # Pass 1: collect long & short candidates (momentum or bounce).
-    long_cands = []    # (score, symbol, price, kind)
+    long_cands = []    # (score, symbol, price, kind) -- passed all filters
     short_cands = []   # (score, symbol, price, kind)
+    raw_longs = []     # (score, symbol, price) -- any strategy signal, NO filters
     for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
         except Exception:  # noqa: BLE001 - skip a coin we can't price
             continue
         action, _ = strategy.decide(prices, False, 0.0)
+        # Raw signal (ignores the optional filters) -- the force-trade fallback.
+        raw_momentum = (strategy.any_long_signal(prices)
+                        if config.USE_ALL_STRATEGIES else action == "BUY")
+        if raw_momentum:
+            raw_longs.append((strategy.momentum_score(prices), symbol, prices[-1]))
         lc = _long_candidate(broker, symbol, prices, action)
         if lc:
             long_cands.append((lc[0], symbol, prices[-1], lc[1]))
@@ -386,6 +392,7 @@ def _scan_setups(broker):
                 short_cands.append((sc[0], symbol, prices[-1], sc[1]))
     long_cands.sort(reverse=True)
     short_cands.sort(reverse=True)
+    raw_longs.sort(reverse=True)
 
     if not (long_cands or short_cands):
         print("  Setups forming: none right now.")
@@ -421,10 +428,10 @@ def _scan_setups(broker):
         _, sym, prc, direction = options[0]
         best_signal = (sym, prc, direction)
 
-    return best_long, long_cands, best_signal
+    return best_long, long_cands, raw_longs, best_signal
 
 
-def _maybe_enter_spot(broker, best, buy_cands):
+def _maybe_enter_spot(broker, best, buy_cands, raw_longs):
     """Spot side: with the scan's result, open the best setup (auto). Returns
     (status_text, a_trade_happened)."""
     cash = broker.cash()                       # spare spot USDT (drives sizing)
@@ -441,11 +448,15 @@ def _maybe_enter_spot(broker, best, buy_cands):
         print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
         return f"At floor ${cash:,.2f} spot; not trading", False
 
-    # Last resort: don't sit idle past MAX_IDLE_DAYS -- take the best raw setup.
-    if best is None and buy_cands and _should_force_trade():
-        symbol, price = buy_cands[0][1], buy_cands[0][2]
-        best = (symbol, price,
-                f"FORCED: {_idle_days()} days idle (>= {config.MAX_IDLE_DAYS})")
+    # Last resort: don't sit idle past MAX_IDLE_DAYS. Prefer a filtered candidate,
+    # but fall back to ANY strategy signal (raw_longs) so the floor always holds
+    # even when the filters cull everything.
+    if best is None and _should_force_trade():
+        pool = buy_cands or raw_longs
+        if pool:
+            symbol, price = pool[0][1], pool[0][2]
+            best = (symbol, price,
+                    f"FORCED: {_idle_days()} days idle (filters relaxed)")
         print(f"  No confirmed setup, but idle {_idle_days()} days -> forcing "
               f"best available: {symbol}")
 
@@ -502,7 +513,7 @@ def main():
 
     # Always scan -- this drives the spot auto-trade AND the futures signal, and
     # runs even while a spot trade is open.
-    best_long, long_cands, best_signal = _scan_setups(broker)
+    best_long, long_cands, raw_longs, best_signal = _scan_setups(broker)
 
     # Trading-session gate: only OPEN new trades / send new signals inside the
     # chosen sessions. (Managing/exiting an open position is never blocked.)
@@ -519,7 +530,7 @@ def main():
     if pos:
         status, traded = _manage_open_position(broker, pos)   # exits always allowed
     elif in_session:
-        status, traded = _maybe_enter_spot(broker, best_long, long_cands)
+        status, traded = _maybe_enter_spot(broker, best_long, long_cands, raw_longs)
     else:
         status, traded = f"Outside session; not entering", False
 
