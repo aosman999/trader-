@@ -360,6 +360,7 @@ def _scan_setups(broker):
 
     # Cheap pass: coins with a directional trigger (strategy signal or at S/R).
     long_trig, short_trig, raw_longs = [], [], []
+    best_any = None   # strongest-trending coin overall (ultimate force fallback)
     for symbol in universe:
         try:
             prices = broker.get_prices(symbol, config.INTERVAL)
@@ -370,6 +371,8 @@ def _scan_setups(broker):
                  else action == "BUY")
         sup = config.USE_SR_BOUNCE and strategy.at_support(prices, config.SR_TOL)
         score = strategy.momentum_score(prices)
+        if best_any is None or score > best_any[0]:
+            best_any = (score, symbol, prices[-1])
         if strat:
             raw_longs.append((score, symbol, prices[-1]))
         if strat or sup:
@@ -382,6 +385,10 @@ def _scan_setups(broker):
     long_trig.sort(reverse=True)
     short_trig.sort(reverse=True)
     raw_longs.sort(reverse=True)
+    # Ultimate fallback so the idle-force ALWAYS has something: if no coin even
+    # signalled, use the strongest-trending coin (only ever used by the force).
+    if not raw_longs and best_any:
+        raw_longs = [best_any]
 
     if not (long_trig or short_trig):
         print("  Setups forming: none right now.")
