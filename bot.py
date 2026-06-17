@@ -61,6 +61,50 @@ def _in_session():
     return False
 
 
+MANUAL_POS_FILE = "manual_positions.json"   # manual futures trades (from talk.py)
+
+
+def _check_manual_positions(broker):
+    """Watch manually-entered futures trades and text the user if one hits its
+    take-profit or stop-loss. Positions are added via talk.py."""
+    if not os.path.exists(MANUAL_POS_FILE):
+        return
+    try:
+        with open(MANUAL_POS_FILE) as f:
+            positions = json.load(f)
+    except Exception:  # noqa: BLE001
+        return
+    kept = []
+    for p in positions:
+        coin, side = p.get("coin"), p.get("side", "long")
+        tp, sl = p.get("tp"), p.get("sl")
+        try:
+            price = broker.get_prices(coin, config.INTERVAL)[-1]
+        except Exception:  # noqa: BLE001 - keep watching if we can't price it now
+            kept.append(p)
+            continue
+        hit = None
+        if side == "long":
+            if tp and price >= tp:
+                hit = "TAKE-PROFIT"
+            elif sl and price <= sl:
+                hit = "STOP-LOSS"
+        else:  # short
+            if tp and price <= tp:
+                hit = "TAKE-PROFIT"
+            elif sl and price >= sl:
+                hit = "STOP-LOSS"
+        if hit:
+            notify.send(f"Your {coin} {side} hit {hit} at ${price:g} -- "
+                        f"close it on MEXC now.", title=f"Manual {coin}: {hit}")
+            print(f"  Manual {coin} {side} hit {hit} at ${price:g} -- texted you.")
+        else:
+            kept.append(p)
+    if len(kept) != len(positions):
+        with open(MANUAL_POS_FILE, "w") as f:
+            json.dump(kept, f, indent=2)
+
+
 def _futures_equity():
     """Total value of the futures wallet in USDT (read-only -- futures *trading*
     via API is blocked, but reading the balance works). 0 on any failure."""
@@ -513,6 +557,10 @@ def main():
     except Exception as exc:  # noqa: BLE001
         print(f"\nCould not reach the account:\n  {exc}")
         return
+
+    # Watch the user's manually-entered futures trades (from talk.py) and text
+    # them if any has hit its take-profit or stop-loss.
+    _check_manual_positions(broker)
 
     # Always scan -- this drives the spot auto-trade AND the futures signal, and
     # runs even while a spot trade is open.
