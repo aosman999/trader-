@@ -53,8 +53,11 @@ def _save(positions):
         json.dump(positions, f, indent=2)
 
 
-def record_trade(coin, side, entry=None, tp=None, sl=None, lev=None, pnl=None):
-    """Record (or replace) a manual futures position so the bot watches it."""
+def record_trade(coin, side, entry=None, tp=None, sl=None, lev=None, pnl=None,
+                 margin=None):
+    """Record (or replace) a manual futures position so the bot watches it.
+    `margin` is how much of the user's money (USDT) is in the trade -- needed so
+    exit alerts can report the dollar profit/loss."""
     coin = coin.upper()
     side = (side or "long").lower()
     if side not in ("long", "short"):
@@ -64,6 +67,8 @@ def record_trade(coin, side, entry=None, tp=None, sl=None, lev=None, pnl=None):
            "tp": float(tp) if tp not in (None, "") else None,
            "sl": float(sl) if sl not in (None, "") else None,
            "lev": float(lev) if lev not in (None, "") else None}
+    if margin not in (None, ""):
+        pos["margin"] = float(margin)
     if pnl not in (None, ""):
         pos["pnl"] = float(pnl)
     positions = [p for p in _load() if p["coin"] != coin]   # replace if exists
@@ -93,6 +98,8 @@ def _describe(p):
         s += f", SL ${p['sl']:g}"
     if p.get("lev"):
         s += f", {p['lev']:g}x"
+    if p.get("margin"):
+        s += f", ${p['margin']:g} in"
     if p.get("pnl") is not None:
         s += f", PnL {p['pnl']:+g}%"
     return s
@@ -163,7 +170,7 @@ def _entered(words):
         entry = float(words[2])
     except ValueError:
         return f"'{words[2]}' isn't a number -- give me the entry price."
-    kw = {"tp": None, "sl": None, "lev": None}
+    kw = {"tp": None, "sl": None, "lev": None, "margin": None}
     rest = words[3:]
     i = 0
     while i < len(rest) - 1:
@@ -175,6 +182,8 @@ def _entered(words):
                 kw["sl"] = float(val)
             elif key in ("lev", "leverage", "x"):
                 kw["lev"] = float(val.rstrip("x"))
+            elif key in ("size", "margin", "amount", "in"):
+                kw["margin"] = float(val.lstrip("$"))
         except ValueError:
             pass
         i += 2
@@ -200,7 +209,7 @@ def _positions():
 
 
 HELP = """I can track the futures trades you place by hand. Try:
-  i entered SOL long 170 tp 200 sl 165 lev 5
+  i entered SOL long 170 tp 200 sl 165 lev 5 size 10
   exited SOL
   positions          (what I'm watching)
   help
@@ -245,11 +254,15 @@ or exited a trade, call close_trade. Use list_positions, market_read and \
 account_status to answer questions about how things are going.
 
 Be brief, concrete and friendly -- this is a chat, not an essay. It's fine to \
-record a trade with only partial info (e.g. just leverage and PnL, no entry); \
-record what you have and gently ask for a stop-loss if they didn't give one, \
-since without it the bot can't warn them. NEVER promise profits or certainty. If \
-the user asks whether to exit, give your honest read of the trend from \
-market_read, but make clear the decision is theirs."""
+record a trade with only partial info; record what you have. Two things matter \
+for good exit alerts, so ask for them if missing: a STOP-LOSS (so the bot can \
+warn them), and the MARGIN -- how much of their money is in the trade -- because \
+the bot reports the dollar profit/loss on exit, and it can't without the size. If \
+they give a percentage of their balance ("50% of my money on each"), call \
+account_status to get their futures equity and compute the margin yourself before \
+calling log_trade. NEVER promise profits or certainty. If the user asks whether \
+to exit, give your honest read of the trend from market_read, but make clear the \
+decision is theirs."""
 
 TOOLS = [
     {"name": "log_trade",
@@ -263,6 +276,10 @@ TOOLS = [
          "tp": {"type": "number", "description": "Take-profit price (optional)"},
          "sl": {"type": "number", "description": "Stop-loss price (optional)"},
          "leverage": {"type": "number", "description": "Leverage, e.g. 2 for 2x"},
+         "margin": {"type": "number", "description": "USDT of the user's own money "
+                    "in this trade (the margin). Needed to report dollar profit on "
+                    "exit. If they say a percentage of their balance, use "
+                    "account_status to get futures equity and compute it."},
          "pnl": {"type": "number", "description": "Current PnL percent, if known"}},
          "required": ["coin", "side"]}},
     {"name": "close_trade",
@@ -289,9 +306,10 @@ def _run_tool(name, inp):
         pos = record_trade(inp["coin"], inp.get("side", "long"),
                            entry=inp.get("entry"), tp=inp.get("tp"),
                            sl=inp.get("sl"), lev=inp.get("leverage"),
-                           pnl=inp.get("pnl"))
+                           margin=inp.get("margin"), pnl=inp.get("pnl"))
         return {"recorded": _describe(pos),
-                "has_stop_loss": pos.get("sl") is not None}
+                "has_stop_loss": pos.get("sl") is not None,
+                "has_size_for_dollar_pnl": pos.get("margin") is not None}
     if name == "close_trade":
         return {"closed": close_position(inp["coin"]), "coin": inp["coin"].upper()}
     if name == "list_positions":

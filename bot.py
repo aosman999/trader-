@@ -64,6 +64,33 @@ def _in_session():
 MANUAL_POS_FILE = "manual_positions.json"   # manual futures trades (from talk.py)
 
 
+def _manual_pnl(p, price):
+    """Profit/loss of a manual futures position at `price`. Returns
+    (pct_move, usd) where pct_move is the raw price move and usd is the dollar
+    P/L on the user's money (margin x leverage x move). usd is None when we don't
+    know the margin (how much money they put in -- add it via talk.py)."""
+    entry = p.get("entry")
+    if not entry:
+        return None, None
+    side = p.get("side", "long")
+    move = (price / entry - 1) if side == "long" else (entry / price - 1)
+    margin = p.get("margin")
+    lev = p.get("lev") or 1
+    usd = margin * lev * move if margin else None
+    return move * 100, usd
+
+
+def _pnl_money(pct, usd):
+    """A short human tail for a notification: the dollar P/L if we know the size,
+    otherwise just the % move with a nudge to tell us the size."""
+    if pct is None:
+        return ""
+    if usd is not None:
+        verb = "profit" if usd >= 0 else "loss"
+        return f" Estimated {verb}: ${abs(usd):,.2f} ({pct:+.2f}% move)."
+    return f" ({pct:+.2f}% move -- tell me your position size for the $ figure.)"
+
+
 def _manual_exit_signal(broker, p):
     """Beyond TP/SL: should the user bail out EARLY? Returns a short reason if the
     trade's thesis is breaking -- the trend turning against the position across
@@ -120,17 +147,21 @@ def _check_manual_positions(broker):
             elif sl and price >= sl:
                 hit = "STOP-LOSS"
         if hit:
+            pct, usd = _manual_pnl(p, price)
+            money = _pnl_money(pct, usd)
             notify.send(f"Your {coin} {side} hit {hit} at ${price:g} -- "
-                        f"close it on MEXC now.", title=f"Manual {coin}: {hit}")
-            print(f"  Manual {coin} {side} hit {hit} at ${price:g} -- texted you.")
+                        f"close it on MEXC now.{money}", title=f"Manual {coin}: {hit}")
+            print(f"  Manual {coin} {side} hit {hit} at ${price:g}{money} -- texted you.")
             continue   # done with this one
 
         # No TP/SL yet -- but should they exit EARLY because the setup is failing?
         reason = _manual_exit_signal(broker, p)
         if reason and not p.get("exit_warned"):
+            pct, usd = _manual_pnl(p, price)
+            money = _pnl_money(pct, usd)
             notify.send(f"Consider EXITING your {coin} {side} (now ${price:g}): "
                         f"{reason}. It hasn't hit TP/SL, but the setup is weakening "
-                        f"-- your call.", title=f"Manual {coin}: consider exit")
+                        f"-- your call.{money}", title=f"Manual {coin}: consider exit")
             print(f"  Manual {coin} {side}: early-exit warning ({reason}).")
             p["exit_warned"] = True
         elif not reason and p.get("exit_warned"):
