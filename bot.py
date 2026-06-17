@@ -346,6 +346,17 @@ def _count_agreement(broker, symbol, trend_fn):
     return agree, checked
 
 
+def _spot_pnl_usd(entry, amount, price):
+    """Net dollar P/L of a spot position sold at `price`, after estimated round-
+    trip fees. None if we don't know the entry."""
+    if not entry:
+        return None
+    gross = amount * (price - entry)
+    fee = getattr(config, "FEE_PCT", 0.0) or 0.0
+    fees = (amount * entry + amount * price) * fee   # buy fee + sell fee
+    return gross - fees
+
+
 def _manage_open_position(broker, pos):
     """We already hold a coin: check the floor, then decide sell/hold on it.
     Returns (status_text, a_trade_happened)."""
@@ -363,10 +374,13 @@ def _manage_open_position(broker, pos):
     if equity <= config.FLOOR_USD:
         print(f"  ** FLOOR REACHED ** (${equity:,.2f} <= ${config.FLOOR_USD:,.2f})")
         msg = broker.close(symbol, pos['amount'], price)
-        print(f"  Closing to protect the floor: {msg}")
-        notify.send(f"FLOOR hit (${equity:,.2f}). {msg}", title="Bot: floor stop")
+        net = _spot_pnl_usd(pos["entry"], pos["amount"], price)
+        money = f" Loss: ${abs(net):,.2f} ({pnl:+.1f}%)." if net is not None else ""
+        print(f"  Closing to protect the floor: {msg}{money}")
+        notify.send(f"FLOOR hit (${equity:,.2f}). {msg}{money}",
+                    title="Bot: floor stop")
         print("  Trading halted. Review before resuming.\n")
-        return f"Floor stop: closed {symbol}", True
+        return f"Floor stop: closed {symbol}{money}", True
 
     # Update the peak-since-entry, then decide (the trailing stop uses it).
     high_water = broker.update_high_water(symbol, pos["entry"], price)
@@ -383,9 +397,16 @@ def _manage_open_position(broker, pos):
             notify.send(f"Close failed for {symbol}: {hint}",
                         title="Bot: close FAILED")
             return f"Close failed: {hint[:80]}", False
-        print(f"  Executed : {msg}")
-        notify.send(msg, title=f"Bot: closed {symbol}")
-        return f"Closed {symbol} at {pnl:+.1f}%", True
+        net = _spot_pnl_usd(pos["entry"], pos["amount"], price)
+        if net is not None:
+            verb = "Profit" if net >= 0 else "Loss"
+            money = f" {verb}: ${abs(net):,.2f} ({pnl:+.1f}%)."
+            tail = f"Closed {symbol}: {net:+,.2f} USD ({pnl:+.1f}%)"
+        else:
+            money, tail = "", f"Closed {symbol} at {pnl:+.1f}%"
+        print(f"  Executed : {msg}{money}")
+        notify.send(msg + money, title=f"Bot: closed {symbol}")
+        return tail, True
     print("  Executed : holding (no change)")
     return (f"Holding {symbol}: {pnl:+.1f}% (now ${price:,.4f}, "
             f"peak ${high_water:,.4f})"), False
