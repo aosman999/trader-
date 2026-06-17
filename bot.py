@@ -64,9 +64,34 @@ def _in_session():
 MANUAL_POS_FILE = "manual_positions.json"   # manual futures trades (from talk.py)
 
 
+def _manual_exit_signal(broker, p):
+    """Beyond TP/SL: should the user bail out EARLY? Returns a short reason if the
+    trade's thesis is breaking -- the trend turning against the position across
+    several timeframes -- so we can tell them to exit before the stop. None if the
+    setup still looks fine."""
+    coin, side = p.get("coin"), p.get("side", "long")
+    against = checked = 0
+    for tf in ("5m", "15m", "1h"):
+        try:
+            prices = broker.get_prices(coin, tf)
+        except Exception:  # noqa: BLE001
+            continue
+        checked += 1
+        if side == "long" and strategy.trend_down(prices):
+            against += 1
+        elif side == "short" and strategy.trend_up(prices):
+            against += 1
+    if checked >= 2 and against >= 2:
+        way = "downtrend" if side == "long" else "uptrend"
+        return (f"the trend has flipped against you ({against}/{checked} "
+                f"timeframes now in a {way})")
+    return None
+
+
 def _check_manual_positions(broker):
-    """Watch manually-entered futures trades and text the user if one hits its
-    take-profit or stop-loss. Positions are added via talk.py."""
+    """Watch manually-entered futures trades (added via talk.py) and text the user
+    when one (a) hits its take-profit / stop-loss, OR (b) has its thesis break --
+    the trend turning against it -- so they can exit early, before the stop."""
     if not os.path.exists(MANUAL_POS_FILE):
         return
     try:
@@ -98,11 +123,21 @@ def _check_manual_positions(broker):
             notify.send(f"Your {coin} {side} hit {hit} at ${price:g} -- "
                         f"close it on MEXC now.", title=f"Manual {coin}: {hit}")
             print(f"  Manual {coin} {side} hit {hit} at ${price:g} -- texted you.")
-        else:
-            kept.append(p)
-    if len(kept) != len(positions):
-        with open(MANUAL_POS_FILE, "w") as f:
-            json.dump(kept, f, indent=2)
+            continue   # done with this one
+
+        # No TP/SL yet -- but should they exit EARLY because the setup is failing?
+        reason = _manual_exit_signal(broker, p)
+        if reason and not p.get("exit_warned"):
+            notify.send(f"Consider EXITING your {coin} {side} (now ${price:g}): "
+                        f"{reason}. It hasn't hit TP/SL, but the setup is weakening "
+                        f"-- your call.", title=f"Manual {coin}: consider exit")
+            print(f"  Manual {coin} {side}: early-exit warning ({reason}).")
+            p["exit_warned"] = True
+        elif not reason and p.get("exit_warned"):
+            p["exit_warned"] = False   # trend recovered -> re-arm the warning
+        kept.append(p)
+    with open(MANUAL_POS_FILE, "w") as f:
+        json.dump(kept, f, indent=2)
 
 
 def _futures_equity():
