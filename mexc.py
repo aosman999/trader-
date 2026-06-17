@@ -69,7 +69,11 @@ class MexcClient:
         if query:
             url = f"{url}?{query}"
         req = urllib.request.Request(url, method=method)
-        if self.api_key:
+        # IMPORTANT: only attach the API key on SIGNED calls. MEXC rejects public
+        # endpoints (klines, ticker) with "signature not sent" if the key header
+        # is present without a signature -- which silently blinded the bot to all
+        # price data.
+        if signed and self.api_key:
             req.add_header("X-MEXC-APIKEY", self.api_key)
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
