@@ -199,6 +199,13 @@ TARGET_STOP = _s("TARGET_STOP", "false").strip().lower() in ("true", "1", "yes",
 # make the bot take reckless trades and lose money. export TARGET_DAYS="21"
 TARGET_DAYS = _i("TARGET_DAYS", "0")
 
+# Measure the goal on your SPOT account only (ignore the futures wallet). Set
+# this "true" if you're trading spot only and want the $ target to track just
+# spot. Default "false" = goal tracks spot + futures combined.
+# export TARGET_SPOT_ONLY="true"
+TARGET_SPOT_ONLY = _s("TARGET_SPOT_ONLY", "false").strip().lower() in (
+    "true", "1", "yes", "on")
+
 # ---------------------------------------------------------------------------
 # REALISM / FILES
 # ---------------------------------------------------------------------------

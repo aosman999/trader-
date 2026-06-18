@@ -569,10 +569,15 @@ def _maybe_enter_spot(broker, best, buy_cands, raw_longs):
     """Spot side: with the scan's result, open the best setup (auto). Returns
     (status_text, a_trade_happened)."""
     cash = broker.cash()                       # spare spot USDT (drives sizing)
-    fut = _futures_equity()                     # whole futures wallet (read-only)
-    total = cash + fut                          # goal is the WHOLE account
-    print(f"  In cash  : ${cash:,.2f} spot  + ${fut:,.2f} futures = "
-          f"${total:,.2f} total")
+    if config.TARGET_SPOT_ONLY:
+        fut = 0.0                               # goal tracks spot only
+        total = cash
+        print(f"  In cash  : ${cash:,.2f} spot (goal tracks spot only)")
+    else:
+        fut = _futures_equity()                 # whole futures wallet (read-only)
+        total = cash + fut                      # goal is the WHOLE account
+        print(f"  In cash  : ${cash:,.2f} spot  + ${fut:,.2f} futures = "
+              f"${total:,.2f} total")
     if config.TARGET_USD > 0:
         print(f"  {_goal_progress(total)}")
     # Goal is judged on the TOTAL account (spot + futures).
