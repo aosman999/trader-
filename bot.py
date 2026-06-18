@@ -365,6 +365,18 @@ def _manage_one(broker, pos, prices):
     high_water = broker.update_high_water(symbol, entry, price)
     action, reason = strategy.decide(prices, True, entry, high_water=high_water,
                                      strategy_name=_active_strategy())
+
+    # Anti-churn: don't bail on a SOFT (strategy) signal within MIN_HOLD_MIN of
+    # entering -- a real stop-loss / trailing stop still exits any time. This
+    # stops the buy-now-sell-next-minute flip-flopping.
+    if action == "SELL" and config.MIN_HOLD_MIN > 0:
+        age_min = (time.time() - pos.get("opened_at", 0.0)) / 60
+        soft = ("stop-loss" not in reason) and ("trailing" not in reason)
+        if soft and pos.get("opened_at") and age_min < config.MIN_HOLD_MIN:
+            print(f"  {symbol}: soft exit held off ({age_min:.0f}<"
+                  f"{config.MIN_HOLD_MIN}min, anti-churn) -- {reason}")
+            return False, f"{symbol} {pnl:+.1f}% (young)", value
+
     if action == "SELL":
         try:
             msg = broker.close(symbol, pos["amount"], price)
@@ -382,6 +394,7 @@ def _manage_one(broker, pos, prices):
         else:
             money, note = "", f"Closed {symbol} ({pnl:+.1f}%)"
         _journal(symbol, entry, price, net, pnl, _active_strategy())
+        _set_cooldown(symbol)          # don't re-enter this coin for a while
         print(f"  {symbol}: SELL -- {reason}.{money}")
         notify.send(msg + money, title=f"Bot: closed {symbol}")
         return True, note, 0.0
@@ -534,6 +547,81 @@ def _journal(symbol, entry, exit_price, net, pnl_pct, strat):
         w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M"), symbol, strat,
                     f"{entry:.6f}", f"{exit_price:.6f}",
                     "" if net is None else f"{net:.2f}", f"{pnl_pct:.2f}"])
+
+
+COOLDOWN_FILE = "reentry_cooldown.json"   # when we last closed each coin
+
+
+def _set_cooldown(symbol):
+    data = {}
+    if os.path.exists(COOLDOWN_FILE):
+        try:
+            with open(COOLDOWN_FILE) as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001
+            data = {}
+    data[symbol] = time.time()
+    with open(COOLDOWN_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def _in_cooldown(symbol):
+    """True if we closed this coin too recently to re-enter it (anti-churn)."""
+    if config.REENTRY_COOLDOWN_MIN <= 0 or not os.path.exists(COOLDOWN_FILE):
+        return False
+    try:
+        with open(COOLDOWN_FILE) as f:
+            t = json.load(f).get(symbol, 0.0)
+    except Exception:  # noqa: BLE001
+        return False
+    return time.time() - t < config.REENTRY_COOLDOWN_MIN * 60
+
+
+DAY_START_FILE = "day_start.json"
+
+
+def _day_start_equity(current):
+    """The spot equity at the start of today (records it on the first run of a
+    new day). Used for the daily profit target."""
+    today = _today()
+    data = {}
+    if os.path.exists(DAY_START_FILE):
+        try:
+            with open(DAY_START_FILE) as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001
+            data = {}
+    if data.get("date") != today:
+        data = {"date": today, "equity": current}
+        with open(DAY_START_FILE, "w") as f:
+            json.dump(data, f)
+    return data.get("equity", current)
+
+
+PROFIT_BASE_FILE = "profit_base.json"   # the equity the doubling ladder starts from
+
+
+def _daily_target(day_start_equity):
+    """The daily profit target in dollars. Starts at DAILY_PROFIT_STOP and doubles
+    each time the account doubles (base $2 -> $4 at 2x -> $8 at 4x ...). 0 = off."""
+    base = config.DAILY_PROFIT_STOP
+    if base <= 0:
+        return 0.0
+    base_eq = None
+    if os.path.exists(PROFIT_BASE_FILE):
+        try:
+            with open(PROFIT_BASE_FILE) as f:
+                base_eq = json.load(f).get("equity")
+        except Exception:  # noqa: BLE001
+            base_eq = None
+    if not base_eq or base_eq <= 0:
+        base_eq = day_start_equity
+        with open(PROFIT_BASE_FILE, "w") as f:
+            json.dump({"equity": base_eq}, f)
+    import math
+    ratio = day_start_equity / base_eq if base_eq > 0 else 1.0
+    doublings = int(math.floor(math.log2(ratio))) if ratio >= 1 else 0
+    return base * (2 ** max(0, doublings))
 
 
 REPORT_STAMP = "last_report.json"
@@ -760,6 +848,19 @@ def _maybe_enter(broker, held, held_value, long_cands, raw_longs):
     if _goal_milestone(total):
         return f"Goal reached ${total:,.2f}; not opening new trades", False
 
+    # Bank the day: once today's profit hits the (doubling) target, stop opening
+    # new trades until tomorrow. Exits still run via _manage_positions.
+    day_start = _day_start_equity(spot_equity)
+    target = _daily_target(day_start)
+    if target > 0:
+        gain = spot_equity - day_start
+        if gain >= target:
+            print(f"  Up ${gain:,.2f} today (target ${target:,.0f}) -- banking it, "
+                  f"no new trades until tomorrow.\n")
+            return (f"Banked ${gain:,.2f} today (>= ${target:,.0f}); done for the "
+                    f"day"), False
+        print(f"  Today: {gain:+,.2f} of ${target:,.0f} target")
+
     if free <= 0:
         return f"Holding max {config.MAX_POSITIONS}; not adding", False
 
@@ -774,10 +875,13 @@ def _maybe_enter(broker, held, held_value, long_cands, raw_longs):
         print(f"  No deployable cash (${cash:,.2f}); not entering.\n")
         return f"In cash ${cash:,.2f}; not entering", False
 
-    # Candidates we don't already hold, best first.
-    cands = [c for c in long_cands if c[1] not in held]
+    # Candidates we don't already hold (and aren't in the re-entry cooldown), best
+    # first.
+    cands = [c for c in long_cands
+             if c[1] not in held and not _in_cooldown(c[1])]
     if not cands and _should_force_trade():
-        pool = [c for c in raw_longs if c[1] not in held]
+        pool = [c for c in raw_longs
+                if c[1] not in held and not _in_cooldown(c[1])]
         if pool:
             cands = [(pool[0][0], pool[0][1], pool[0][2],
                       f"FORCED idle {_idle_days()}d")]

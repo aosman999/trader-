@@ -27,6 +27,7 @@ spend real money.
 
 import json
 import os
+import time
 
 import config
 import data
@@ -103,7 +104,8 @@ class PaperBroker:
             if p.get("coins", 0) > 0:
                 out.append({"symbol": p["symbol"], "amount": p["coins"],
                             "entry": p.get("entry", 0.0),
-                            "high_water": p.get("high_water") or p.get("entry", 0.0)})
+                            "high_water": p.get("high_water") or p.get("entry", 0.0),
+                            "opened_at": p.get("opened_at", 0.0)})
         return out
 
     def update_high_water(self, symbol, entry, price):
@@ -126,7 +128,8 @@ class PaperBroker:
         coins = (spend - fee) / price
         self.state["cash"] -= spend
         self.state.setdefault("positions", []).append(
-            {"symbol": symbol, "coins": coins, "entry": price, "high_water": price})
+            {"symbol": symbol, "coins": coins, "entry": price, "high_water": price,
+             "opened_at": time.time()})
         portfolio.save(self.state)
         return f"BUY {coins:.8f} {symbol} at ${price:,.4f} (spent ${spend:,.2f})"
 
@@ -200,7 +203,8 @@ class MexcBroker:
                 continue
             out.append({"symbol": p["symbol"], "amount": amount,
                         "entry": p.get("entry", 0.0),
-                        "high_water": p.get("high_water") or p.get("entry", 0.0)})
+                        "high_water": p.get("high_water") or p.get("entry", 0.0),
+                        "opened_at": p.get("opened_at", 0.0)})
         return out
 
     def update_high_water(self, symbol, entry, price):
@@ -232,7 +236,8 @@ class MexcBroker:
             return f"DRY-RUN: would BUY ~${usd:,.2f} of {symbol} (nothing placed)"
         positions = self._load()
         positions = [p for p in positions if p["symbol"] != symbol]
-        positions.append({"symbol": symbol, "entry": price, "high_water": price})
+        positions.append({"symbol": symbol, "entry": price, "high_water": price,
+                          "opened_at": time.time()})
         self._save(positions)
         return f"BUY ~${usd:,.2f} of {symbol} at ~${price:,.2f} [REAL ORDER]"
 

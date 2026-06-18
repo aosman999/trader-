@@ -24,3 +24,6 @@ best_strategy.json
 last_learn.json
 last_report.json
 trade_journal.csv
+reentry_cooldown.json
+day_start.json
+profit_base.json

@@ -100,6 +100,21 @@ STOP_LOSS_PCT = _f("STOP_LOSS_PCT", "0.04")
 # 0.05 = 5% off the peak. export TRAIL_PCT="0.05"
 TRAIL_PCT = _f("TRAIL_PCT", "0.05")
 
+# ANTI-CHURN -- stop the buy/sell/buy-again flip-flopping on the same coin.
+# Keep a fresh position at least this many minutes before a SOFT (strategy) exit;
+# a real stop-loss or trailing stop can still fire any time. 0 = off.
+MIN_HOLD_MIN = _i("MIN_HOLD_MIN", "15")
+# After closing a coin, don't re-enter THAT coin for this many minutes. 0 = off.
+REENTRY_COOLDOWN_MIN = _i("REENTRY_COOLDOWN_MIN", "30")
+
+# BANK THE DAY -- a daily profit target (vs the day's starting balance). Once
+# today's profit reaches it, stop OPENING new trades until tomorrow (exits still
+# happen), so a good day isn't given back by over-trading. The target is this many
+# dollars to START, and DOUBLES as the account doubles: base $2, then $4 once
+# equity has doubled, $8 at 4x, $16 at 8x, and so on. 0 = off.
+# export DAILY_PROFIT_STOP="2"
+DAILY_PROFIT_STOP = _f("DAILY_PROFIT_STOP", "0")
+
 # ---------------------------------------------------------------------------
 # STRATEGY
 # ---------------------------------------------------------------------------
