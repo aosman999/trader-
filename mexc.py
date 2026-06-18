@@ -20,6 +20,7 @@ ONLY -- never enable withdrawals on a key a bot uses.
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 import urllib.parse
@@ -46,6 +47,7 @@ class MexcClient:
         self.api_secret = api_secret or os.environ.get("MEXC_API_SECRET", "")
         self.dry_run = DRY_RUN_DEFAULT if dry_run is None else dry_run
         self.max_order_usd = max_order_usd
+        self._precisions = {}   # cache: symbol -> how many decimals it allows
 
     # -- low-level request helpers -------------------------------------------
 
@@ -179,8 +181,44 @@ class MexcClient:
                   "quoteOrderQty": round(usd_amount, 2)}
         return self._place(params, usd_amount)
 
+    def _base_precision(self, symbol):
+        """How many decimal places this symbol allows for the base quantity. We
+        must round a SELL down to this, or MEXC rejects it as 'Oversold' (it reads
+        the extra decimals as selling more than you hold). Cached; None if unknown."""
+        if symbol in self._precisions:
+            return self._precisions[symbol]
+        prec = None
+        try:
+            data = self._request("GET", "/api/v3/exchangeInfo", {"symbol": symbol})
+            syms = data.get("symbols") or []
+            if syms:
+                s = syms[0]
+                if s.get("baseAssetPrecision") is not None:
+                    prec = int(s["baseAssetPrecision"])
+                for f in s.get("filters", []):     # LOT_SIZE is more restrictive
+                    if f.get("filterType") == "LOT_SIZE" and f.get("stepSize"):
+                        step = f["stepSize"].rstrip("0").rstrip(".")
+                        sp = len(step.split(".")[1]) if "." in step else 0
+                        prec = sp if prec is None else min(prec, sp)
+        except Exception:  # noqa: BLE001
+            prec = None
+        self._precisions[symbol] = prec
+        return prec
+
     def market_sell(self, symbol, quantity, price_hint=0.0):
-        """Sell `quantity` of the base asset (e.g. BTC) at market price."""
+        """Sell `quantity` of the base asset (e.g. BTC) at market price. Rounds the
+        quantity DOWN to the symbol's allowed precision so it never exceeds the
+        balance (which MEXC rejects as 'Oversold')."""
+        prec = self._base_precision(symbol)
+        if prec is None:                  # unknown -> be conservative
+            prec, quantity = 6, quantity * 0.999
+        factor = 10 ** prec
+        qty = math.floor(quantity * factor) / factor
+        if qty <= 0:
+            raise MexcError(f"{symbol}: holding too small to sell ({quantity}).")
+        qstr = f"{qty:.{prec}f}"
+        if "." in qstr:
+            qstr = qstr.rstrip("0").rstrip(".")
         params = {"symbol": symbol, "side": "SELL", "type": "MARKET",
-                  "quantity": quantity}
-        return self._place(params, quantity * price_hint)
+                  "quantity": qstr}
+        return self._place(params, qty * price_hint)
