@@ -69,6 +69,13 @@ STARTING_CASH = _f("STARTING_CASH", "20")
 # Fraction of available cash used per BUY. export TRADE_FRACTION="0.5"
 TRADE_FRACTION = _f("TRADE_FRACTION", "0.5")
 
+# MAX CONCURRENT POSITIONS -- how many different coins the bot may hold at once.
+# 1 = all money in the single best setup (one coin at a time). 3 = it may spread
+# across up to 3 coins. Each run it deploys all your available cash, split evenly
+# across however many good setups it finds that moment: one great setup -> all
+# the money in it; three at once -> a third each. export MAX_POSITIONS="3"
+MAX_POSITIONS = _i("MAX_POSITIONS", "1")
+
 # CAPITAL FLOOR -- the bot never knowingly risks money below this, and halts +
 # closes if equity falls to it. export FLOOR_USD="12"
 FLOOR_USD = _f("FLOOR_USD", "12")

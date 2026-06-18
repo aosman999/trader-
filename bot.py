@@ -357,59 +357,82 @@ def _spot_pnl_usd(entry, amount, price):
     return gross - fees
 
 
-def _manage_open_position(broker, pos):
-    """We already hold a coin: check the floor, then decide sell/hold on it.
-    Returns (status_text, a_trade_happened)."""
-    symbol = pos["symbol"]
-    prices = broker.get_prices(symbol)
-    price = prices[-1]
+def _manage_one(broker, pos, prices):
+    """Decide sell/hold on ONE held coin. Returns (sold?, note, value_if_held)."""
+    symbol, price, entry = pos["symbol"], prices[-1], pos["entry"]
+    pnl = (price / entry - 1) * 100 if entry else 0.0
     value = broker.position_value(symbol, pos["amount"], price)
-    equity = broker.cash() + value
-    pnl = (price / pos["entry"] - 1) * 100 if pos["entry"] else 0.0
-
-    print(f"\n  Holding  : {symbol} (entry ${pos['entry']:,.2f})")
-    print(f"  Price now: ${price:,.2f}   Equity: ${equity:,.2f}")
-
-    # Circuit breaker: protect the floor.
-    if equity <= config.FLOOR_USD:
-        print(f"  ** FLOOR REACHED ** (${equity:,.2f} <= ${config.FLOOR_USD:,.2f})")
-        msg = broker.close(symbol, pos['amount'], price)
-        net = _spot_pnl_usd(pos["entry"], pos["amount"], price)
-        money = f" Loss: ${abs(net):,.2f} ({pnl:+.1f}%)." if net is not None else ""
-        print(f"  Closing to protect the floor: {msg}{money}")
-        notify.send(f"FLOOR hit (${equity:,.2f}). {msg}{money}",
-                    title="Bot: floor stop")
-        print("  Trading halted. Review before resuming.\n")
-        return f"Floor stop: closed {symbol}{money}", True
-
-    # Update the peak-since-entry, then decide (the trailing stop uses it).
-    high_water = broker.update_high_water(symbol, pos["entry"], price)
-    action, reason = strategy.decide(prices, True, pos["entry"],
-                                     high_water=high_water)
-    print(f"  Peak     : ${high_water:,.2f}")
-    print(f"  Decision : {action}  --  {reason}")
+    high_water = broker.update_high_water(symbol, entry, price)
+    action, reason = strategy.decide(prices, True, entry, high_water=high_water)
     if action == "SELL":
         try:
-            msg = broker.close(symbol, pos['amount'], price)
+            msg = broker.close(symbol, pos["amount"], price)
         except Exception as exc:  # noqa: BLE001
             hint = _order_error_hint(exc)
-            print(f"  Close FAILED: {hint}")
+            print(f"  {symbol}: close FAILED -- {hint}")
             notify.send(f"Close failed for {symbol}: {hint}",
                         title="Bot: close FAILED")
-            return f"Close failed: {hint[:80]}", False
-        net = _spot_pnl_usd(pos["entry"], pos["amount"], price)
+            return False, f"{symbol}: close failed", value
+        net = _spot_pnl_usd(entry, pos["amount"], price)
         if net is not None:
             verb = "Profit" if net >= 0 else "Loss"
             money = f" {verb}: ${abs(net):,.2f} ({pnl:+.1f}%)."
-            tail = f"Closed {symbol}: {net:+,.2f} USD ({pnl:+.1f}%)"
+            note = f"Closed {symbol} {net:+,.2f} USD ({pnl:+.1f}%)"
         else:
-            money, tail = "", f"Closed {symbol} at {pnl:+.1f}%"
-        print(f"  Executed : {msg}{money}")
+            money, note = "", f"Closed {symbol} ({pnl:+.1f}%)"
+        print(f"  {symbol}: SELL -- {reason}.{money}")
         notify.send(msg + money, title=f"Bot: closed {symbol}")
-        return tail, True
-    print("  Executed : holding (no change)")
-    return (f"Holding {symbol}: {pnl:+.1f}% (now ${price:,.4f}, "
-            f"peak ${high_water:,.4f})"), False
+        return True, note, 0.0
+    print(f"  {symbol}: hold ({pnl:+.1f}%, peak ${high_water:,.4f}) -- {reason}")
+    return False, f"{symbol} {pnl:+.1f}%", value
+
+
+def _manage_positions(broker, positions):
+    """Manage every held coin. Floor circuit breaker on TOTAL equity first (close
+    all + halt). Returns (status, traded?, held_symbols, held_value)."""
+    if not positions:
+        return "no open positions", False, [], 0.0
+    cash = broker.cash()
+    priced, total_value = [], 0.0
+    for pos in positions:
+        try:
+            prices = broker.get_prices(pos["symbol"])
+        except Exception:  # noqa: BLE001 - keep it; just can't manage it this run
+            priced.append((pos, None))
+            continue
+        priced.append((pos, prices))
+        total_value += broker.position_value(pos["symbol"], pos["amount"],
+                                             prices[-1])
+    equity = cash + total_value
+    print(f"\n  Holding {len(positions)} position(s); equity ${equity:,.2f}")
+
+    # Circuit breaker on TOTAL equity -- close everything and halt. Only when we
+    # could price every position (don't liquidate blind on a fetch glitch).
+    if all(pr is not None for _, pr in priced) and equity <= config.FLOOR_USD:
+        print(f"  ** FLOOR REACHED ** (${equity:,.2f} <= ${config.FLOOR_USD})")
+        for pos, prices in priced:
+            try:
+                broker.close(pos["symbol"], pos["amount"], prices[-1])
+            except Exception:  # noqa: BLE001
+                pass
+        notify.send(f"FLOOR hit (equity ${equity:,.2f}) -- closed all positions "
+                    f"and halted. Review before resuming.", title="Bot: floor stop")
+        print("  Trading halted. Review before resuming.\n")
+        return f"Floor stop: closed all at ${equity:,.2f}", True, [], 0.0
+
+    held, held_value, traded, notes = [], 0.0, False, []
+    for pos, prices in priced:
+        if prices is None:
+            held.append(pos["symbol"])
+            continue
+        sold, note, value = _manage_one(broker, pos, prices)
+        notes.append(note)
+        if sold:
+            traded = True
+        else:
+            held.append(pos["symbol"])
+            held_value += value
+    return "; ".join(notes), traded, held, held_value
 
 
 EVAL_CAP = 12   # max triggered coins to fully evaluate per run (API budget)
@@ -565,61 +588,76 @@ def _scan_setups(broker):
     return best_long, long_cands, raw_longs, best_signal
 
 
-def _maybe_enter_spot(broker, best, buy_cands, raw_longs):
-    """Spot side: with the scan's result, open the best setup (auto). Returns
+def _maybe_enter(broker, held, held_value, long_cands, raw_longs):
+    """Open new spot positions up to config.MAX_POSITIONS. Deploys all available
+    cash this run, split evenly across however many good setups it found (one
+    great setup -> all the money in it; three at once -> a third each). Returns
     (status_text, a_trade_happened)."""
-    cash = broker.cash()                       # spare spot USDT (drives sizing)
+    free = config.MAX_POSITIONS - len(held)
+    cash = broker.cash()
+    spot_equity = cash + held_value             # whole spot account value
+
     if config.TARGET_SPOT_ONLY:
-        fut = 0.0                               # goal tracks spot only
-        total = cash
-        print(f"  In cash  : ${cash:,.2f} spot (goal tracks spot only)")
+        total = spot_equity
+        print(f"  Spot equity ${spot_equity:,.2f} (cash ${cash:,.2f}); "
+              f"goal tracks spot only")
     else:
-        fut = _futures_equity()                 # whole futures wallet (read-only)
-        total = cash + fut                      # goal is the WHOLE account
-        print(f"  In cash  : ${cash:,.2f} spot  + ${fut:,.2f} futures = "
-              f"${total:,.2f} total")
+        fut = _futures_equity()
+        total = spot_equity + fut
+        print(f"  Spot ${spot_equity:,.2f} + futures ${fut:,.2f} = ${total:,.2f}")
     if config.TARGET_USD > 0:
         print(f"  {_goal_progress(total)}")
-    # Goal is judged on the TOTAL account (spot + futures).
     if _goal_milestone(total):
-        return f"Goal reached ${total:,.2f}; banked, not trading", False
-    if cash <= config.FLOOR_USD:
-        print(f"  At/under floor (${config.FLOOR_USD:,.2f}); not opening new trades.\n")
-        return f"At floor ${cash:,.2f} spot; not trading", False
+        return f"Goal reached ${total:,.2f}; not opening new trades", False
 
-    # Last resort: don't sit idle past MAX_IDLE_DAYS. Prefer a filtered candidate,
-    # but fall back to ANY strategy signal (raw_longs) so the floor always holds
-    # even when the filters cull everything.
-    if best is None and _should_force_trade():
-        pool = buy_cands or raw_longs
+    if free <= 0:
+        return f"Holding max {config.MAX_POSITIONS}; not adding", False
+
+    # How much cash we may deploy. With RESERVE_FLOOR we keep the floor as cash;
+    # without it we deploy everything, but only START trades while we're still
+    # above the floor (the circuit breaker handles dropping to it mid-trade).
+    if config.RESERVE_FLOOR:
+        available = max(0.0, cash - config.FLOOR_USD)
+    else:
+        available = cash if spot_equity > config.FLOOR_USD else 0.0
+    if available < 1:
+        print(f"  No deployable cash (${cash:,.2f}); not entering.\n")
+        return f"In cash ${cash:,.2f}; not entering", False
+
+    # Candidates we don't already hold, best first.
+    cands = [c for c in long_cands if c[1] not in held]
+    if not cands and _should_force_trade():
+        pool = [c for c in raw_longs if c[1] not in held]
         if pool:
-            fsym, fprice = pool[0][1], pool[0][2]
-            best = (fsym, fprice,
-                    f"FORCED: {_idle_days()} days idle (filters relaxed)")
-            print(f"  No confirmed setup, but idle {_idle_days()} days -> "
-                  f"forcing best available: {fsym}")
-
-    if best is None:
+            cands = [(pool[0][0], pool[0][1], pool[0][2],
+                      f"FORCED idle {_idle_days()}d")]
+            print(f"  Idle {_idle_days()}d -> forcing best available: {pool[0][1]}")
+    if not cands:
         idle = f" | idle {_idle_days()}d" if config.MAX_IDLE_DAYS else ""
-        print(f"  None confirmed. Staying in cash.{idle}\n")
-        return (f"In cash ${cash:,.2f}; {len(buy_cands)} setups, none confirmed"
-                f"{idle}"), False
+        print(f"  No new confirmed setups. Cash ${cash:,.2f}.{idle}\n")
+        return f"In cash ${cash:,.2f}; no new setups{idle}", False
 
-    symbol, price, reason = best
-    print(f"  Best pick: {symbol} @ ${price:,.2f}  ({reason})")
-    try:
-        msg = broker.open(symbol, price)
-    except Exception as exc:  # noqa: BLE001 - a failed order must not crash the run
-        hint = _order_error_hint(exc)
-        print(f"  Order FAILED: {hint}")
-        notify.send(f"Order failed for {symbol}: {hint}", title="Bot: order FAILED")
-        return f"Order failed: {hint[:80]}", False
-    print(f"  Executed : {msg or 'nothing (floor/size limit)'}")
-    if msg:
-        _record_trade_today()
-        notify.send(msg, title=f"Bot: entered {symbol}")
-        return f"Entered {symbol} @ ${price:,.4f}", True
-    return f"In cash ${cash:,.2f}; setup found but size/floor blocked it", False
+    n = min(free, len(cands))                   # how many we open this run
+    per = available / n                          # all available cash, split evenly
+    opened = []
+    for c in cands[:n]:
+        symbol, price = c[1], c[2]
+        try:
+            msg = broker.open(symbol, price, budget=per)
+        except Exception as exc:  # noqa: BLE001 - one bad order must not crash the run
+            hint = _order_error_hint(exc)
+            print(f"  Order FAILED {symbol}: {hint}")
+            notify.send(f"Order failed for {symbol}: {hint}",
+                        title="Bot: order FAILED")
+            continue
+        if msg:
+            opened.append(symbol)
+            _record_trade_today()
+            notify.send(msg, title=f"Bot: entered {symbol}")
+            print(f"  Entered {symbol} ~${per:,.2f}: {msg}")
+    if opened:
+        return f"Entered {', '.join(opened)} (~${per:,.2f} each)", True
+    return f"In cash ${cash:,.2f}; setups found but orders blocked", False
 
 
 def main():
@@ -645,7 +683,7 @@ def main():
             print("  (real account; LIVE -- it WILL place REAL orders / real money)")
 
     try:
-        pos = broker.current_position()
+        positions = broker.current_positions()
     except Exception as exc:  # noqa: BLE001
         print(f"\nCould not reach the account:\n  {exc}")
         return
@@ -669,13 +707,16 @@ def main():
     if in_session and config.FUTURES_SIGNALS and best_signal:
         _send_futures_signal(best_signal[0], best_signal[1], best_signal[2])
 
-    # Spot side (long-only: buys to enter, sells to exit).
-    if pos:
-        status, traded = _manage_open_position(broker, pos)   # exits always allowed
-    elif in_session:
-        status, traded = _maybe_enter_spot(broker, best_long, long_cands, raw_longs)
-    else:
-        status, traded = f"Outside session; not entering", False
+    # Spot side (long-only: buys to enter, sells to exit). Manage what we hold
+    # (exits always allowed), then open new positions up to MAX_POSITIONS.
+    status, traded, held, held_value = _manage_positions(broker, positions)
+    if in_session:
+        enter_status, entered = _maybe_enter(broker, held, held_value,
+                                             long_cands, raw_longs)
+        traded = traded or entered
+        status = f"{status} | {enter_status}" if positions else enter_status
+    elif not positions:
+        status = "Outside session; not entering"
 
     print(f"  Cash available: ${broker.cash():,.2f}\n")
 

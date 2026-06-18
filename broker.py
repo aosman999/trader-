@@ -54,7 +54,8 @@ def _demo_seed(symbol):
 
 
 class PaperBroker:
-    """Fake money. Prices from data.py, holdings tracked in portfolio.json."""
+    """Fake money. Prices from data.py, holdings tracked in portfolio.json.
+    Supports holding several coins at once (config.MAX_POSITIONS)."""
 
     label = "PAPER (fake money)"
     is_live = False
@@ -62,6 +63,20 @@ class PaperBroker:
     def __init__(self, use_demo=False):
         self.use_demo = use_demo
         self.state = portfolio.load()
+        self._migrate()
+
+    def _migrate(self):
+        """Upgrade the old single-coin state to a positions list, in place."""
+        if "positions" not in self.state:
+            positions = []
+            if self.state.get("symbol") and self.state.get("coins", 0) > 0:
+                positions.append({"symbol": self.state["symbol"],
+                                  "coins": self.state["coins"],
+                                  "entry": self.state.get("entry_price", 0.0),
+                                  "high_water": self.state.get("high_water")
+                                  or self.state.get("entry_price", 0.0)})
+            self.state["positions"] = positions
+            portfolio.save(self.state)
 
     def universe(self):
         # Paper has no live coin list; use the watchlist or a default of majors.
@@ -82,33 +97,50 @@ class PaperBroker:
     def cash(self):
         return self.state["cash"]
 
-    def current_position(self):
-        if self.state["coins"] > 0 and self.state.get("symbol"):
-            return {"symbol": self.state["symbol"],
-                    "amount": self.state["coins"],
-                    "entry": self.state["entry_price"],
-                    "high_water": self.state.get("high_water")
-                    or self.state["entry_price"]}
-        return None
+    def current_positions(self):
+        out = []
+        for p in self.state.get("positions", []):
+            if p.get("coins", 0) > 0:
+                out.append({"symbol": p["symbol"], "amount": p["coins"],
+                            "entry": p.get("entry", 0.0),
+                            "high_water": p.get("high_water") or p.get("entry", 0.0)})
+        return out
 
     def update_high_water(self, symbol, entry, price):
-        hw = max(self.state.get("high_water") or entry, price)
-        self.state["high_water"] = hw
-        portfolio.save(self.state)
-        return hw
+        for p in self.state.get("positions", []):
+            if p["symbol"] == symbol:
+                p["high_water"] = max(p.get("high_water") or entry, price)
+                portfolio.save(self.state)
+                return p["high_water"]
+        return max(entry, price)
 
     def position_value(self, symbol, amount, price):
         return amount * price
 
-    def open(self, symbol, price):
-        msg = portfolio.buy(self.state, symbol, price)
+    def open(self, symbol, price, budget=None):
+        spend = budget if budget is not None else self.state["cash"] * config.TRADE_FRACTION
+        spend = min(spend, self.state["cash"])
+        if spend < 1:
+            return None
+        fee = spend * config.FEE_PCT
+        coins = (spend - fee) / price
+        self.state["cash"] -= spend
+        self.state.setdefault("positions", []).append(
+            {"symbol": symbol, "coins": coins, "entry": price, "high_water": price})
         portfolio.save(self.state)
-        return msg
+        return f"BUY {coins:.8f} {symbol} at ${price:,.4f} (spent ${spend:,.2f})"
 
     def close(self, symbol, amount, price):
-        msg = portfolio.sell(self.state, price)
+        positions = self.state.get("positions", [])
+        kept = [p for p in positions if p["symbol"] != symbol]
+        sold = [p for p in positions if p["symbol"] == symbol]
+        if not sold:
+            return None
+        proceeds = sum(p["coins"] for p in sold) * price
+        self.state["cash"] += proceeds - proceeds * config.FEE_PCT
+        self.state["positions"] = kept
         portfolio.save(self.state)
-        return msg
+        return f"SELL {amount:.8f} {symbol} at ${price:,.4f} (got ${proceeds:,.2f})"
 
 
 class MexcBroker:
@@ -142,49 +174,66 @@ class MexcBroker:
         return self.client.volume_ratio(symbol + "USDT", config.INTERVAL, 50)
 
     def _load(self):
-        if os.path.exists(self.STATE_FILE):
-            with open(self.STATE_FILE) as f:
-                return json.load(f)
-        return {}
+        """Return the saved positions list, migrating the old single-coin format."""
+        if not os.path.exists(self.STATE_FILE):
+            return []
+        with open(self.STATE_FILE) as f:
+            st = json.load(f)
+        if isinstance(st, dict):
+            if st.get("positions") is not None:
+                return st["positions"]
+            if st.get("symbol"):                     # migrate old single-coin file
+                return [{"symbol": st["symbol"], "entry": st.get("entry", 0.0),
+                         "high_water": st.get("high_water") or st.get("entry", 0.0)}]
+            return []
+        return st
 
-    def current_position(self):
-        st = self._load()
-        symbol = st.get("symbol")
-        if not symbol:
-            return None
-        amount = self.client.get_free_balance(symbol)
-        if amount <= 0:
-            os.remove(self.STATE_FILE)
-            return None
-        return {"symbol": symbol, "amount": amount,
-                "entry": st.get("entry", 0.0),
-                "high_water": st.get("high_water") or st.get("entry", 0.0)}
+    def _save(self, positions):
+        with open(self.STATE_FILE, "w") as f:
+            json.dump({"positions": positions}, f, indent=2)
+
+    def current_positions(self):
+        out = []
+        for p in self._load():
+            amount = self.client.get_free_balance(p["symbol"])
+            if amount <= 0:                          # already sold/dust -> drop it
+                continue
+            out.append({"symbol": p["symbol"], "amount": amount,
+                        "entry": p.get("entry", 0.0),
+                        "high_water": p.get("high_water") or p.get("entry", 0.0)})
+        return out
 
     def update_high_water(self, symbol, entry, price):
-        st = self._load()
-        hw = max(st.get("high_water") or entry, price)
-        st["high_water"] = hw
-        with open(self.STATE_FILE, "w") as f:
-            json.dump(st, f)
+        positions = self._load()
+        hw = max(entry, price)
+        for p in positions:
+            if p["symbol"] == symbol:
+                p["high_water"] = max(p.get("high_water") or entry, price)
+                hw = p["high_water"]
+        self._save(positions)
         return hw
 
     def position_value(self, symbol, amount, price):
         return amount * price
 
-    def open(self, symbol, price):
-        equity = self.cash()
-        if config.RESERVE_FLOOR:
-            usd = min(equity * config.TRADE_FRACTION,
-                      max(0.0, equity - config.FLOOR_USD))
-        else:
-            usd = equity * config.TRADE_FRACTION         # deploy all cash
+    def open(self, symbol, price, budget=None):
+        if budget is None:                           # legacy single-position sizing
+            equity = self.cash()
+            if config.RESERVE_FLOOR:
+                budget = min(equity * config.TRADE_FRACTION,
+                             max(0.0, equity - config.FLOOR_USD))
+            else:
+                budget = equity * config.TRADE_FRACTION
+        usd = min(budget, self.cash())
         if usd < 1:
             return None
         result = self.client.market_buy(symbol + "USDT", usd)
         if result.get("dry_run"):
             return f"DRY-RUN: would BUY ~${usd:,.2f} of {symbol} (nothing placed)"
-        with open(self.STATE_FILE, "w") as f:
-            json.dump({"symbol": symbol, "entry": price, "high_water": price}, f)
+        positions = self._load()
+        positions = [p for p in positions if p["symbol"] != symbol]
+        positions.append({"symbol": symbol, "entry": price, "high_water": price})
+        self._save(positions)
         return f"BUY ~${usd:,.2f} of {symbol} at ~${price:,.2f} [REAL ORDER]"
 
     def close(self, symbol, amount, price):
@@ -192,8 +241,7 @@ class MexcBroker:
                                          price_hint=price)
         if result.get("dry_run"):
             return f"DRY-RUN: would SELL {amount:.8f} {symbol} (nothing placed)"
-        if os.path.exists(self.STATE_FILE):
-            os.remove(self.STATE_FILE)
+        self._save([p for p in self._load() if p["symbol"] != symbol])
         return f"SELL {amount:.8f} {symbol} at ~${price:,.2f} [REAL ORDER]"
 
 
@@ -260,13 +308,19 @@ class MexcFuturesBroker:
         return {"symbol": symbol, "amount": vol, "entry": entry,
                 "high_water": self._stored_hwm(symbol) or entry}
 
+    def current_positions(self):
+        pos = self.current_position()
+        return [pos] if pos else []
+
     def position_value(self, symbol, amount, price):
         return amount * self._contract_size(self._pair(symbol)) * price
 
-    def open(self, symbol, price):
+    def open(self, symbol, price, budget=None):
         pair = self._pair(symbol)
         equity = self.cash()
-        if config.RESERVE_FLOOR:
+        if budget is not None:
+            margin = min(budget, equity)
+        elif config.RESERVE_FLOOR:
             margin = min(equity * config.TRADE_FRACTION,
                          max(0.0, equity - config.FLOOR_USD))
         else:
