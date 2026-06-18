@@ -440,6 +440,31 @@ DEPLOY_BUFFER = 0.98   # spend ~98% of cash; the rest covers fees/rounding/lag s
                        # MEXC doesn't reject the order ("Insufficient position")
 MIN_TRADE_USD = 1.0    # never place an order smaller than this (exchange minimum)
 
+SKIP_FILE = "skip_symbols.json"   # coins MEXC won't let the API trade (code 10007)
+# Stablecoins / fiat tokens: trading these against USDT can't make real profit and
+# several aren't API-tradeable. Never trade them.
+STABLES = {"USDT", "USDC", "USDE", "USD1", "DAI", "TUSD", "BUSD", "FDUSD",
+           "PYUSD", "USDP", "GUSD", "USDD", "FRAX", "LUSD", "EUR", "EURT",
+           "EURS", "EURI", "EURC", "GBP", "AEUR", "USDG", "USDY"}
+
+
+def _load_skip():
+    if os.path.exists(SKIP_FILE):
+        try:
+            with open(SKIP_FILE) as f:
+                return set(json.load(f))
+        except Exception:  # noqa: BLE001
+            return set()
+    return set()
+
+
+def _add_skip(symbol):
+    """Remember a coin MEXC won't trade via API, so we never try it again."""
+    syms = _load_skip()
+    syms.add(symbol)
+    with open(SKIP_FILE, "w") as f:
+        json.dump(sorted(syms), f)
+
 
 def _tf_prices(broker, symbol):
     """Fetch each timeframe's candles once (for trend + S/R-confluence checks)."""
@@ -511,6 +536,10 @@ def _scan_setups(broker):
     except Exception as exc:  # noqa: BLE001
         print(f"  Could not list coins: {str(exc).splitlines()[0][:60]}")
         return None, [], [], None
+
+    # Drop stablecoins/fiat (can't profit) and coins MEXC won't trade via API.
+    skip = _load_skip()
+    universe = [s for s in universe if s.upper() not in STABLES and s not in skip]
 
     src = "watchlist" if config.WATCHLIST else "most-active MEXC coins"
     print(f"  Scanning {len(universe)} {src} on the {config.INTERVAL} timeframe...")
@@ -654,6 +683,11 @@ def _maybe_enter(broker, held, held_value, long_cands, raw_longs):
         try:
             msg = broker.open(symbol, price, budget=per)
         except Exception as exc:  # noqa: BLE001 - one bad order must not crash the run
+            text = str(exc)
+            if "10007" in text or "not support api" in text:
+                _add_skip(symbol)        # MEXC won't trade it via API -> never retry
+                print(f"  {symbol} not API-tradeable -> skip-listed (no retry).")
+                continue                 # expected; don't spam a notification
             hint = _order_error_hint(exc)
             print(f"  Order FAILED {symbol}: {hint}")
             notify.send(f"Order failed for {symbol}: {hint}",
