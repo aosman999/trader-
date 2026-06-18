@@ -436,6 +436,9 @@ def _manage_positions(broker, positions):
 
 
 EVAL_CAP = 12   # max triggered coins to fully evaluate per run (API budget)
+DEPLOY_BUFFER = 0.98   # spend ~98% of cash; the rest covers fees/rounding/lag so
+                       # MEXC doesn't reject the order ("Insufficient position")
+MIN_TRADE_USD = 1.0    # never place an order smaller than this (exchange minimum)
 
 
 def _tf_prices(broker, symbol):
@@ -638,7 +641,13 @@ def _maybe_enter(broker, held, held_value, long_cands, raw_longs):
         return f"In cash ${cash:,.2f}; no new setups{idle}", False
 
     n = min(free, len(cands))                   # how many we open this run
-    per = available / n                          # all available cash, split evenly
+    # Leave a small buffer below the reported cash for fees, rounding and the
+    # exchange's balance-settlement lag -- spending literally 100% gets rejected
+    # ("Insufficient position"). And don't split so thin an order becomes dust.
+    spendable = available * DEPLOY_BUFFER
+    while n > 1 and spendable / n < MIN_TRADE_USD:
+        n -= 1
+    per = spendable / n                          # spendable cash, split evenly
     opened = []
     for c in cands[:n]:
         symbol, price = c[1], c[2]
