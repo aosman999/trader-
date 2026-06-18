@@ -218,6 +218,21 @@ TARGET_STOP = _s("TARGET_STOP", "false").strip().lower() in ("true", "1", "yes",
 # make the bot take reckless trades and lose money. export TARGET_DAYS="21"
 TARGET_DAYS = _i("TARGET_DAYS", "0")
 
+# ---------------------------------------------------------------------------
+# SELF-IMPROVEMENT (learn & adapt)
+# ---------------------------------------------------------------------------
+# When "true", the bot periodically BACKTESTS every built-in strategy on recent
+# real prices across the coins it watches, and switches to whichever performed
+# best -- so it adapts to current conditions instead of being stuck on one. It
+# re-checks every LEARN_EVERY_HOURS hours over LEARN_COINS coins. Honest limit:
+# backtests use PAST data; a past winner is not a promise of future profit.
+# export AUTO_LEARN="true"
+AUTO_LEARN = _s("AUTO_LEARN", "false").strip().lower() in ("true", "1", "yes", "on")
+LEARN_EVERY_HOURS = _i("LEARN_EVERY_HOURS", "24")
+LEARN_COINS = _i("LEARN_COINS", "8")
+# Text a weekly trade-performance report card (win rate, P/L). 0 = off.
+REPORT_EVERY_DAYS = _i("REPORT_EVERY_DAYS", "7")
+
 # Measure the goal on your SPOT account only (ignore the futures wallet). Set
 # this "true" if you're trading spot only and want the $ target to track just
 # spot. Default "false" = goal tracks spot + futures combined.

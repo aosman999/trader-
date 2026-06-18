@@ -363,7 +363,8 @@ def _manage_one(broker, pos, prices):
     pnl = (price / entry - 1) * 100 if entry else 0.0
     value = broker.position_value(symbol, pos["amount"], price)
     high_water = broker.update_high_water(symbol, entry, price)
-    action, reason = strategy.decide(prices, True, entry, high_water=high_water)
+    action, reason = strategy.decide(prices, True, entry, high_water=high_water,
+                                     strategy_name=_active_strategy())
     if action == "SELL":
         try:
             msg = broker.close(symbol, pos["amount"], price)
@@ -380,6 +381,7 @@ def _manage_one(broker, pos, prices):
             note = f"Closed {symbol} {net:+,.2f} USD ({pnl:+.1f}%)"
         else:
             money, note = "", f"Closed {symbol} ({pnl:+.1f}%)"
+        _journal(symbol, entry, price, net, pnl, _active_strategy())
         print(f"  {symbol}: SELL -- {reason}.{money}")
         notify.send(msg + money, title=f"Bot: closed {symbol}")
         return True, note, 0.0
@@ -464,6 +466,117 @@ def _add_skip(symbol):
     syms.add(symbol)
     with open(SKIP_FILE, "w") as f:
         json.dump(sorted(syms), f)
+
+
+_ACTIVE_STRATEGY = None       # cached for this run
+
+
+def _active_strategy():
+    """Which strategy to trade with: the learned best (if AUTO_LEARN and we've
+    picked one) else the configured STRATEGY."""
+    global _ACTIVE_STRATEGY
+    if _ACTIVE_STRATEGY is not None:
+        return _ACTIVE_STRATEGY
+    name = config.STRATEGY
+    if config.AUTO_LEARN:
+        try:
+            import learn
+            best = learn.load_best()
+            if best and best.get("strategy") in strategy.STRATEGIES:
+                name = best["strategy"]
+        except Exception:  # noqa: BLE001
+            pass
+    _ACTIVE_STRATEGY = name
+    return name
+
+
+def _maybe_learn(broker):
+    """Periodically re-run the strategy tournament and switch to the winner."""
+    if not config.AUTO_LEARN:
+        return
+    try:
+        import learn
+        if not learn.due(config.LEARN_EVERY_HOURS):
+            return
+        coins = [s for s in broker.universe()
+                 if s.upper() not in STABLES and s not in _load_skip()]
+        coins = coins[:config.LEARN_COINS]
+        name, summary = learn.pick_best(broker, coins, config.INTERVAL)
+        prev = (learn.load_best() or {}).get("strategy")
+        learn.save_best(name, summary)
+        learn.mark_done()
+        global _ACTIVE_STRATEGY
+        _ACTIVE_STRATEGY = name
+        s = summary.get(name, {})
+        print(f"  Learned: best strategy now '{name}' "
+              f"({s.get('avg_return', 0) * 100:+.1f}% avg, "
+              f"{s.get('winrate', 0) * 100:.0f}% wins over {len(coins)} coins)")
+        if prev and prev != name:
+            notify.send(f"Switched strategy to '{name}' "
+                        f"({s.get('avg_return', 0) * 100:+.1f}% in recent backtests, "
+                        f"was '{prev}').", title="Bot: learned a better strategy")
+    except Exception as exc:  # noqa: BLE001 - learning must never crash a run
+        print(f"  (learning skipped: {str(exc).splitlines()[0][:80]})")
+
+
+JOURNAL_FILE = "trade_journal.csv"
+
+
+def _journal(symbol, entry, exit_price, net, pnl_pct, strat):
+    """Append one closed spot trade to the journal so we can review what works."""
+    import csv
+    new = not os.path.exists(JOURNAL_FILE)
+    with open(JOURNAL_FILE, "a", newline="") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["time", "symbol", "strategy", "entry", "exit",
+                        "pnl_usd", "pnl_pct"])
+        w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M"), symbol, strat,
+                    f"{entry:.6f}", f"{exit_price:.6f}",
+                    "" if net is None else f"{net:.2f}", f"{pnl_pct:.2f}"])
+
+
+REPORT_STAMP = "last_report.json"
+
+
+def _maybe_report():
+    """Once every REPORT_EVERY_DAYS, text a report card of trades since the last
+    one: how many, win rate, net dollars, best and worst."""
+    if config.REPORT_EVERY_DAYS <= 0 or not os.path.exists(JOURNAL_FILE):
+        return
+    last = 0.0
+    if os.path.exists(REPORT_STAMP):
+        try:
+            with open(REPORT_STAMP) as f:
+                last = json.load(f).get("ts", 0.0)
+        except Exception:  # noqa: BLE001
+            last = 0.0
+    if time.time() - last < config.REPORT_EVERY_DAYS * 86400:
+        return
+    import csv
+    pnls = []
+    try:
+        with open(JOURNAL_FILE) as f:
+            for r in csv.DictReader(f):
+                if not r.get("pnl_usd"):
+                    continue
+                try:
+                    ts = datetime.strptime(r["time"], "%Y-%m-%d %H:%M").timestamp()
+                except Exception:  # noqa: BLE001
+                    ts = 0.0
+                if ts >= last:
+                    pnls.append(float(r["pnl_usd"]))
+    except Exception:  # noqa: BLE001
+        return
+    with open(REPORT_STAMP, "w") as f:
+        json.dump({"ts": time.time()}, f)
+    if not pnls:
+        return
+    n, wins = len(pnls), sum(1 for p in pnls if p > 0)
+    notify.send(f"Report card: {n} trades, {wins / n * 100:.0f}% wins, "
+                f"net ${sum(pnls):+.2f} (best ${max(pnls):+.2f}, "
+                f"worst ${min(pnls):+.2f}). Strategy: {_active_strategy()}.",
+                title="Bot: trade report card")
 
 
 def _tf_prices(broker, symbol):
@@ -552,9 +665,14 @@ def _scan_setups(broker):
             prices = broker.get_prices(symbol, config.INTERVAL)
         except Exception:  # noqa: BLE001
             continue
-        action, _ = strategy.decide(prices, False, 0.0)
-        strat = (strategy.any_long_signal(prices) if config.USE_ALL_STRATEGIES
-                 else action == "BUY")
+        action, _ = strategy.decide(prices, False, 0.0,
+                                    strategy_name=_active_strategy())
+        if config.AUTO_LEARN:
+            strat = action == "BUY"             # trade the single learned-best one
+        elif config.USE_ALL_STRATEGIES:
+            strat = strategy.any_long_signal(prices)
+        else:
+            strat = action == "BUY"
         sup = config.USE_SR_BOUNCE and strategy.at_support(prices, config.SR_TOL)
         score = strategy.momentum_score(prices)
         if best_any is None or score > best_any[0]:
@@ -734,6 +852,13 @@ def main():
     # Watch the user's manually-entered futures trades (from talk.py) and text
     # them if any has hit its take-profit or stop-loss.
     _check_manual_positions(broker)
+
+    # Self-improvement: occasionally re-test the strategies and switch to the
+    # best, and text a periodic performance report card.
+    _maybe_learn(broker)
+    _maybe_report()
+    if config.AUTO_LEARN:
+        print(f"  Trading strategy: {_active_strategy()} (auto-learned)")
 
     # Always scan -- this drives the spot auto-trade AND the futures signal, and
     # runs even while a spot trade is open.

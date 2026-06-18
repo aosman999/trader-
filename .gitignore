@@ -20,3 +20,7 @@ goal_reached.json
 target_start.json
 manual_positions.json
 skip_symbols.json
+best_strategy.json
+last_learn.json
+last_report.json
+trade_journal.csv
