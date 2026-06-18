@@ -73,6 +73,18 @@ TRADE_FRACTION = _f("TRADE_FRACTION", "0.5")
 # closes if equity falls to it. export FLOOR_USD="12"
 FLOOR_USD = _f("FLOOR_USD", "12")
 
+# HOW the floor is protected:
+#   "true"  (default, safer) -- RESERVE the floor as cash. The bot only ever
+#           spends money ABOVE FLOOR_USD, so even a total loss leaves the floor
+#           untouched. It simply can't go below the floor.
+#   "false" (riskier) -- deploy ALL your cash into a trade. The floor is then
+#           protected only by the circuit breaker: the bot exits everything and
+#           HALTS the moment total equity falls to FLOOR_USD. A fast crash
+#           between the once-a-minute checks could briefly dip below the floor.
+# export RESERVE_FLOOR="false"
+RESERVE_FLOOR = _s("RESERVE_FLOOR", "true").strip().lower() in (
+    "true", "1", "yes", "on")
+
 # Stop-loss: exit if price moves this far against entry. 0.04 = 4%.
 # export STOP_LOSS_PCT="0.04"
 STOP_LOSS_PCT = _f("STOP_LOSS_PCT", "0.04")

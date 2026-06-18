@@ -60,8 +60,11 @@ def buy(state, symbol, price):
     """Spend a fraction of cash on `symbol`, but never risk below the floor.
     Returns a message, or None if nothing happened."""
     equity = state["cash"]                                # flat when buying
-    risk_budget = max(0.0, equity - config.FLOOR_USD)     # protect the floor
-    spend = min(state["cash"] * config.TRADE_FRACTION, risk_budget)
+    if config.RESERVE_FLOOR:
+        risk_budget = max(0.0, equity - config.FLOOR_USD)  # protect the floor
+        spend = min(state["cash"] * config.TRADE_FRACTION, risk_budget)
+    else:
+        spend = state["cash"] * config.TRADE_FRACTION      # deploy all cash
     if spend < 1:  # not enough cash to bother, or floor reached
         return None
     fee = spend * config.FEE_PCT

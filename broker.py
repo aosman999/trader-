@@ -173,8 +173,11 @@ class MexcBroker:
 
     def open(self, symbol, price):
         equity = self.cash()
-        usd = min(equity * config.TRADE_FRACTION,
-                  max(0.0, equity - config.FLOOR_USD))
+        if config.RESERVE_FLOOR:
+            usd = min(equity * config.TRADE_FRACTION,
+                      max(0.0, equity - config.FLOOR_USD))
+        else:
+            usd = equity * config.TRADE_FRACTION         # deploy all cash
         if usd < 1:
             return None
         result = self.client.market_buy(symbol + "USDT", usd)
@@ -263,8 +266,11 @@ class MexcFuturesBroker:
     def open(self, symbol, price):
         pair = self._pair(symbol)
         equity = self.cash()
-        margin = min(equity * config.TRADE_FRACTION,
-                     max(0.0, equity - config.FLOOR_USD))
+        if config.RESERVE_FLOOR:
+            margin = min(equity * config.TRADE_FRACTION,
+                         max(0.0, equity - config.FLOOR_USD))
+        else:
+            margin = equity * config.TRADE_FRACTION       # deploy all cash
         if margin < 1:
             return None
         notional = margin * self.client.leverage
