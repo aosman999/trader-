@@ -206,12 +206,14 @@ class MexcClient:
         return prec
 
     def market_sell(self, symbol, quantity, price_hint=0.0):
-        """Sell `quantity` of the base asset (e.g. BTC) at market price. Rounds the
-        quantity DOWN to the symbol's allowed precision so it never exceeds the
-        balance (which MEXC rejects as 'Oversold')."""
+        """Sell `quantity` of the base asset (e.g. BTC) at market price. Applies a
+        tiny safety haircut and rounds DOWN to the symbol's allowed precision, so
+        the order can never exceed the real free balance -- MEXC rejects that as
+        'Oversold' (code 30005), even when the excess is a rounding/fee crumb."""
         prec = self._base_precision(symbol)
-        if prec is None:                  # unknown -> be conservative
-            prec, quantity = 6, quantity * 0.999
+        if prec is None:
+            prec = 6
+        quantity *= 0.995                 # 0.5% haircut: never sell more than held
         factor = 10 ** prec
         qty = math.floor(quantity * factor) / factor
         if qty <= 0:
