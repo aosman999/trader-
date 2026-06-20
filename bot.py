@@ -767,7 +767,12 @@ def _scan_setups(broker):
             best_any = (score, symbol, prices[-1])
         if strat:
             raw_longs.append((score, symbol, prices[-1]))
-        if strat or sup:
+        # When auto-learning, an entry MUST come from the chosen strategy's own BUY
+        # signal -- the same thing the backtest rewarded -- so live trades match
+        # what tested profitable, instead of firing on loose support/volume setups
+        # the strategy never endorsed.
+        trigger = strat if config.AUTO_LEARN else (strat or sup)
+        if trigger:
             long_trig.append((score, symbol, prices, strat, sup))
         elif config.FUTURES_SIGNALS:
             sstrat = strategy.short_signal(prices)

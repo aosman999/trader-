@@ -242,12 +242,28 @@ class MexcBroker:
         return f"BUY ~${usd:,.2f} of {symbol} at ~${price:,.2f} [REAL ORDER]"
 
     def close(self, symbol, amount, price):
-        result = self.client.market_sell(symbol + "USDT", amount,
-                                         price_hint=price)
+        # Sell the LIVE free balance (authoritative, never stale), and if MEXC
+        # still says 'Oversold' (a balance/fee/rounding crumb), retry with a bigger
+        # haircut until it clears. market_sell adds its own 0.5% + precision floor.
+        live = self.client.get_free_balance(symbol)
+        qty = live if live > 0 else amount
+        result, last = None, None
+        for frac in (1.0, 0.98, 0.95):
+            try:
+                result = self.client.market_sell(symbol + "USDT", qty * frac,
+                                                  price_hint=price)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if "Oversold" in str(exc) or "30005" in str(exc):
+                    last = exc
+                    continue
+                raise
+        if result is None:
+            raise last
         if result.get("dry_run"):
-            return f"DRY-RUN: would SELL {amount:.8f} {symbol} (nothing placed)"
+            return f"DRY-RUN: would SELL {qty:.8f} {symbol} (nothing placed)"
         self._save([p for p in self._load() if p["symbol"] != symbol])
-        return f"SELL {amount:.8f} {symbol} at ~${price:,.2f} [REAL ORDER]"
+        return f"SELL {qty:.8f} {symbol} at ~${price:,.2f} [REAL ORDER]"
 
 
 class MexcFuturesBroker:
