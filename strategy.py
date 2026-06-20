@@ -268,6 +268,62 @@ def _decide_breakout(prices, holding):
     return "HOLD", "no breakout yet; waiting in cash"
 
 
+def exponential_moving_average(prices, period):
+    """EMA -- like a moving average but weights recent prices more, so it reacts
+    faster to turns than a simple average. None if not enough data."""
+    if len(prices) < period:
+        return None
+    k = 2.0 / (period + 1)
+    e = sum(prices[:period]) / period      # seed with the SMA of the first window
+    for p in prices[period:]:
+        e = p * k + e * (1 - k)
+    return e
+
+
+def _decide_ema(prices, holding):
+    """EMA crossover -- the faster-reacting cousin of the SMA strategy. Buy when
+    the fast EMA crosses above the slow EMA, sell when it crosses back below."""
+    if len(prices) < config.SMA_SLOW + 1:
+        return "HOLD", "not enough price history yet"
+    fast_now = exponential_moving_average(prices, config.SMA_FAST)
+    slow_now = exponential_moving_average(prices, config.SMA_SLOW)
+    fast_prev = exponential_moving_average(prices[:-1], config.SMA_FAST)
+    slow_prev = exponential_moving_average(prices[:-1], config.SMA_SLOW)
+    if holding:
+        if fast_prev >= slow_prev and fast_now < slow_now:
+            return "SELL", "EMA fast crossed below slow (downtrend)"
+        return "HOLD", "EMA still in an uptrend; holding"
+    if fast_prev <= slow_prev and fast_now > slow_now:
+        return "BUY", "EMA fast crossed above slow (uptrend)"
+    return "HOLD", "no EMA entry signal; waiting in cash"
+
+
+def _price_std(prices, n):
+    window = prices[-n:]
+    m = sum(window) / n
+    return (sum((p - m) ** 2 for p in window) / n) ** 0.5
+
+
+def _decide_bollinger(prices, holding):
+    """Bollinger Band mean-reversion -- buy a dip when price falls to the lower
+    band (cheap relative to its recent range), sell when it reverts to the middle
+    (the average). A classic 'buy low, sell back to fair value' strategy."""
+    n = 20
+    if len(prices) < n + 1:
+        return "HOLD", "not enough price history yet"
+    mid = sum(prices[-n:]) / n
+    sd = _price_std(prices, n)
+    lower = mid - 2 * sd
+    price = prices[-1]
+    if holding:
+        if price >= mid:
+            return "SELL", "price reverted to the mean (Bollinger middle)"
+        return "HOLD", "below the mean; waiting for reversion up"
+    if price <= lower:
+        return "BUY", "price at the lower Bollinger band (oversold dip)"
+    return "HOLD", "price inside the bands; waiting for a dip"
+
+
 def any_long_signal(prices):
     """True if ANY of the built-in strategies (sma, rsi, breakout, pro) signals a
     BUY here -- so the bot can take a good setup from any of them, not just the
@@ -295,6 +351,8 @@ STRATEGIES = {
     "rsi": _decide_rsi,
     "breakout": _decide_breakout,
     "pro": _decide_pro,
+    "ema": _decide_ema,
+    "bollinger": _decide_bollinger,
 }
 
 
