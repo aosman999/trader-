@@ -248,7 +248,7 @@ class MexcBroker:
         live = self.client.get_free_balance(symbol)
         qty = live if live > 0 else amount
         result, last = None, None
-        for frac in (1.0, 0.98, 0.95):
+        for frac in (1.0, 0.98, 0.95, 0.90, 0.85):
             try:
                 result = self.client.market_sell(symbol + "USDT", qty * frac,
                                                   price_hint=price)

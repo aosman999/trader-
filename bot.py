@@ -383,8 +383,9 @@ def _manage_one(broker, pos, prices):
         except Exception as exc:  # noqa: BLE001
             hint = _order_error_hint(exc)
             print(f"  {symbol}: close FAILED -- {hint}")
-            notify.send(f"Close failed for {symbol}: {hint}",
-                        title="Bot: close FAILED")
+            if _notify_throttled(f"closefail:{symbol}", 60):   # not every minute
+                notify.send(f"Close failed for {symbol}: {hint}",
+                            title="Bot: close FAILED")
             return False, f"{symbol}: close failed", value
         net = _spot_pnl_usd(entry, pos["amount"], price)
         if net is not None:
@@ -479,6 +480,27 @@ def _add_skip(symbol):
     syms.add(symbol)
     with open(SKIP_FILE, "w") as f:
         json.dump(sorted(syms), f)
+
+
+NOTIFY_DEDUP_FILE = "notify_dedup.json"
+
+
+def _notify_throttled(key, minutes):
+    """True (and records now) if `key` hasn't fired within `minutes` -- used so a
+    repeating problem doesn't text you every single minute."""
+    data = {}
+    if os.path.exists(NOTIFY_DEDUP_FILE):
+        try:
+            with open(NOTIFY_DEDUP_FILE) as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001
+            data = {}
+    if time.time() - data.get(key, 0.0) < minutes * 60:
+        return False
+    data[key] = time.time()
+    with open(NOTIFY_DEDUP_FILE, "w") as f:
+        json.dump(data, f)
+    return True
 
 
 _ACTIVE_STRATEGY = None       # cached for this run

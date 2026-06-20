@@ -27,3 +27,5 @@ trade_journal.csv
 reentry_cooldown.json
 day_start.json
 profit_base.json
+
+notify_dedup.json
