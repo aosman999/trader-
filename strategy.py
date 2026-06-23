@@ -142,16 +142,34 @@ def _risk_exit(price_now, entry_price, high_water):
     """Shared safety net used while holding. Returns a (action, reason) SELL
     tuple if a risk rule fires, else None.
 
+      * Hard take-profit (optional) -- bank the gain at a fixed target.
       * Hard stop-loss from entry -- caps the loss if the trade goes wrong fast.
+      * Breakeven lock -- once the trade has been up enough, never let it close
+        red: protect it at breakeven (covering fees) so a winner can't become a
+        loser.
       * Trailing stop -- once the price has risen, lock in gains by exiting if it
-        falls TRAIL_PCT below the highest price seen since entry. This lets a
-        winner run far above +16% while protecting the profit.
+        falls TRAIL_PCT below the highest price seen since entry.
     """
     if not entry_price:
         return None
+    # Hard take-profit: bank a fixed gain (only if configured).
+    if config.TAKE_PROFIT_PCT > 0 and \
+            price_now >= entry_price * (1 + config.TAKE_PROFIT_PCT):
+        gain = (price_now / entry_price - 1) * 100
+        return "SELL", f"take-profit hit (+{gain:.1f}%)"
+    # Hard stop-loss from entry.
     if price_now <= entry_price * (1 - config.STOP_LOSS_PCT):
         return "SELL", (f"stop-loss hit (down "
                         f"{(1 - price_now / entry_price) * 100:.1f}%)")
+    # Breakeven lock: once it has been up >= LOCK_PROFIT_PCT, don't let it turn
+    # into a loss -- protect at breakeven (covering the round-trip fee).
+    if config.LOCK_PROFIT_PCT > 0 and \
+            high_water >= entry_price * (1 + config.LOCK_PROFIT_PCT):
+        breakeven = entry_price * (1 + 2 * config.FEE_PCT)
+        if price_now <= breakeven:
+            return "SELL", ("locked at breakeven (it was in profit -- not letting "
+                            "it turn into a loss)")
+    # Trailing stop.
     if high_water and price_now <= high_water * (1 - config.TRAIL_PCT):
         gain = (price_now / entry_price - 1) * 100
         return "SELL", (f"trailing stop ({config.TRAIL_PCT * 100:.0f}% off peak; "

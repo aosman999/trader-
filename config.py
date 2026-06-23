@@ -97,8 +97,19 @@ RESERVE_FLOOR = _s("RESERVE_FLOOR", "true").strip().lower() in (
 STOP_LOSS_PCT = _f("STOP_LOSS_PCT", "0.04")
 
 # Trailing take-profit: let winners run, exit this far below the peak-since-entry.
-# 0.05 = 5% off the peak. export TRAIL_PCT="0.05"
-TRAIL_PCT = _f("TRAIL_PCT", "0.05")
+# 0.03 = 3% off the peak. Tighter = locks gains sooner (good for small moves).
+# export TRAIL_PCT="0.03"
+TRAIL_PCT = _f("TRAIL_PCT", "0.03")
+
+# BREAKEVEN LOCK -- once a trade has been up at least this much, never let it close
+# at a loss: the stop moves up to breakeven (covering fees). Stops the heartbreak
+# of a winner turning into a loser. 0 = off. export LOCK_PROFIT_PCT="0.02"
+LOCK_PROFIT_PCT = _f("LOCK_PROFIT_PCT", "0.02")
+
+# HARD TAKE-PROFIT (optional) -- bank the gain at a fixed target instead of waiting
+# for the trailing stop. 0 = off (let the trailing stop manage it). e.g. 0.06 = +6%.
+# export TAKE_PROFIT_PCT="0.06"
+TAKE_PROFIT_PCT = _f("TAKE_PROFIT_PCT", "0")
 
 # ANTI-CHURN -- stop the buy/sell/buy-again flip-flopping on the same coin.
 # Keep a fresh position at least this many minutes before a SOFT (strategy) exit;
